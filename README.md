@@ -13,6 +13,8 @@
 </p>
 <h3 align="center">High performance self-hosted photo and video management solution</h3>
 <br/>
+<h3 align="center">Why this fork?</h3>
+<p align="center">My family recently started using Immich. While it works great for us, we soon ran into a limitation that affects us — and possibly others. Our server is remote, and we access it through Cloudflare Tunnels rather than the more common methods, which don't suit our needs. The problem we immediately hit is that Cloudflare caps single-file uploads through a tunnel at 100 MB. I had an idea to get around this: split the file into multiple parts, upload them, then reassemble them on the server — sort of the reverse of how download managers work. Here I'm doing the initial groundwork and testing to see whether the idea works. If it holds up consistently and doesn't cause any new issues with the app or server, I plan to submit a PR to add it to the project.</p>
 <a href="https://immich.app">
 <img src="design/immich-screenshots.png" title="Main Screenshot">
 </a>

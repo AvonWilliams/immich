@@ -134,6 +134,7 @@ const ServerFeaturesSchema = z
     smartSearch: z.boolean().describe('Whether smart search is enabled'),
     duplicateDetection: z.boolean().describe('Whether duplicate detection is enabled'),
     configFile: z.boolean().describe('Whether config file is available'),
+    chunkedUpload: z.boolean().describe('Whether chunked upload is supported'),
     facialRecognition: z.boolean().describe('Whether facial recognition is enabled'),
     map: z.boolean().describe('Whether map feature is enabled'),
     trash: z.boolean().describe('Whether trash feature is enabled'),

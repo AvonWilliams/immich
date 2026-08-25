@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -8,6 +9,7 @@ import {
   Param,
   ParseFilePipe,
   Post,
+  Put,
   Query,
   Req,
   Res,
@@ -27,6 +29,9 @@ import {
   AssetMediaCreateDto,
   AssetMediaOptionsDto,
   AssetMediaSize,
+  AssetMediaUploadInitDto,
+  AssetMediaUploadParamDto,
+  AssetMediaUploadQueryDto,
 } from 'src/dtos/asset-media.dto';
 import { AssetDownloadOriginalDto } from 'src/dtos/asset.dto';
 import { AuthDto } from 'src/dtos/auth.dto';
@@ -87,6 +92,101 @@ export class AssetMediaController {
     }
 
     return responseDto;
+  }
+
+  @Post('upload')
+  @Authenticated({ permission: Permission.AssetUpload, sharedLink: true })
+  @ApiBody({ description: 'Chunked upload initialization', type: AssetMediaUploadInitDto })
+  @ApiResponse({ status: 201, description: 'Chunked upload session initialized' })
+  @Endpoint({
+    summary: 'Initialize chunked upload',
+    description: 'Creates a new chunked upload session for the given asset.',
+    history: new HistoryBuilder().added('v3.1.0').beta('v3.1.0'),
+  })
+  initChunkedUpload(@Auth() auth: AuthDto, @Body() _dto: AssetMediaUploadInitDto): Promise<{ uploadId: string }> {
+    return this.service.initChunkedUpload(auth);
+  }
+
+  @Put('upload/:uploadId')
+  @Authenticated({ permission: Permission.AssetUpload, sharedLink: true })
+  @ApiConsumes('application/octet-stream')
+  @ApiResponse({ status: 200, description: 'Chunk appended successfully' })
+  @ApiResponse({ status: 409, description: 'Byte offset does not match the committed size' })
+  @Endpoint({
+    summary: 'Upload a chunk',
+    description: 'Appends a chunk of binary data to the given chunked upload session.',
+    history: new HistoryBuilder().added('v3.1.0').beta('v3.1.0'),
+  })
+  async uploadChunk(
+    @Auth() auth: AuthDto,
+    @Param() { uploadId }: AssetMediaUploadParamDto,
+    @Query() { offset }: AssetMediaUploadQueryDto,
+    @Req() req: Request,
+  ): Promise<{ offset: number }> {
+    return this.service.uploadChunk(auth, uploadId, offset, req);
+  }
+
+  @Get('upload/:uploadId')
+  @Authenticated({ permission: Permission.AssetUpload, sharedLink: true })
+  @ApiResponse({ status: 200, description: 'Chunked upload status' })
+  @Endpoint({
+    summary: 'Get chunked upload status',
+    description: 'Returns the number of bytes committed so far for the given chunked upload session.',
+    history: new HistoryBuilder().added('v3.1.0').beta('v3.1.0'),
+  })
+  getChunkedUploadStatus(
+    @Auth() auth: AuthDto,
+    @Param() { uploadId }: AssetMediaUploadParamDto,
+  ): Promise<{ offset: number }> {
+    return this.service.getChunkedUploadStatus(auth, uploadId);
+  }
+
+  @Post('upload/:uploadId/finalize')
+  @Authenticated({ permission: Permission.AssetUpload, sharedLink: true })
+  @UseInterceptors(FileUploadInterceptor)
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ description: 'Chunked upload finalization', type: AssetMediaCreateDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Asset is a duplicate',
+    type: AssetMediaResponseDto,
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Asset uploaded successfully',
+    type: AssetMediaResponseDto,
+  })
+  @Endpoint({
+    summary: 'Finalize chunked upload',
+    description: 'Assembles the uploaded chunks and creates a new asset.',
+    history: new HistoryBuilder().added('v3.1.0').beta('v3.1.0'),
+  })
+  async finalizeChunkedUpload(
+    @Auth() auth: AuthDto,
+    @Param() { uploadId }: AssetMediaUploadParamDto,
+    @Body() dto: AssetMediaCreateDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AssetMediaResponseDto> {
+    const responseDto = await this.service.finalizeChunkedUpload(auth, uploadId, dto);
+
+    if (responseDto.status === AssetMediaStatus.DUPLICATE) {
+      res.status(HttpStatus.OK);
+    }
+
+    return responseDto;
+  }
+
+  @Delete('upload/:uploadId')
+  @Authenticated({ permission: Permission.AssetUpload, sharedLink: true })
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiResponse({ status: 204, description: 'Chunked upload deleted' })
+  @Endpoint({
+    summary: 'Delete a chunked upload',
+    description: 'Aborts a chunked upload session and deletes any partial data.',
+    history: new HistoryBuilder().added('v3.1.0').beta('v3.1.0'),
+  })
+  deleteChunkedUpload(@Auth() auth: AuthDto, @Param() { uploadId }: AssetMediaUploadParamDto): Promise<void> {
+    return this.service.deleteChunkedUpload(auth, uploadId);
   }
 
   @Get(':id/original')

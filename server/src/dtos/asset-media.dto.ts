@@ -76,6 +76,28 @@ const AssetBulkUploadCheckSchema = z
   })
   .meta({ id: 'AssetBulkUploadCheckDto' });
 
+const AssetMediaUploadInitSchema = z
+  .object({
+    filename: z.string().describe('Filename of the asset'),
+    totalSize: z.coerce.number().int().min(0).optional().describe('Total size of the asset in bytes'),
+  })
+  .meta({ id: 'AssetMediaUploadInitDto' });
+
+const AssetMediaUploadParamSchema = z
+  .object({
+    uploadId: z.uuidv4().describe('Chunked upload session ID'),
+  })
+  .meta({ id: 'AssetMediaUploadParamDto' });
+
+const AssetMediaUploadQuerySchema = z
+  .object({
+    offset: z.coerce.number().int().min(0).describe('Byte offset of the chunk'),
+  })
+  .meta({ id: 'AssetMediaUploadQueryDto' });
+
 export class AssetMediaOptionsDto extends createZodDto(AssetMediaOptionsSchema) {}
 export class AssetMediaCreateDto extends createZodDto(AssetMediaCreateSchema) {}
 export class AssetBulkUploadCheckDto extends createZodDto(AssetBulkUploadCheckSchema) {}
+export class AssetMediaUploadInitDto extends createZodDto(AssetMediaUploadInitSchema) {}
+export class AssetMediaUploadParamDto extends createZodDto(AssetMediaUploadParamSchema) {}
+export class AssetMediaUploadQueryDto extends createZodDto(AssetMediaUploadQuerySchema) {}

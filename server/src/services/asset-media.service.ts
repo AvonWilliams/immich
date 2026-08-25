@@ -1,4 +1,12 @@
-import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
+import { createHash, randomUUID } from 'node:crypto';
+import { pipeline, Readable, Writable } from 'node:stream';
 import sanitize from 'sanitize-filename';
 import { StorageCore } from 'src/cores/storage.core';
 import { Asset, AuthSharedLink } from 'src/database';
@@ -343,6 +351,109 @@ export class AssetMediaService extends BaseService {
         };
       }),
     };
+  }
+
+  initChunkedUpload(auth: AuthDto): Promise<{ uploadId: string }> {
+    auth = requireUploadAccess(auth);
+    const uploadId = randomUUID();
+    const { folder } = this.getChunkedUploadPaths(auth, uploadId);
+    this.storageRepository.mkdirSync(folder);
+    return Promise.resolve({ uploadId });
+  }
+
+  async uploadChunk(auth: AuthDto, uploadId: string, offset: number, request: Readable): Promise<{ offset: number }> {
+    auth = requireUploadAccess(auth);
+    const { folder, partialPath } = this.getChunkedUploadPaths(auth, uploadId);
+    this.storageRepository.mkdirSync(folder);
+
+    let current = 0;
+    if (this.storageRepository.existsSync(partialPath)) {
+      const { size } = await this.storageRepository.stat(partialPath);
+      current = size;
+    }
+    if (offset !== current) {
+      throw new ConflictException({ offset: current });
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      pipeline(request, this.storageRepository.createAppendStream(partialPath), (error) =>
+        error ? reject(error) : resolve(),
+      );
+    });
+
+    const { size } = await this.storageRepository.stat(partialPath);
+    return { offset: size };
+  }
+
+  async getChunkedUploadStatus(auth: AuthDto, uploadId: string): Promise<{ offset: number }> {
+    auth = requireUploadAccess(auth);
+    const { partialPath } = this.getChunkedUploadPaths(auth, uploadId);
+    if (!this.storageRepository.existsSync(partialPath)) {
+      return { offset: 0 };
+    }
+    const { size } = await this.storageRepository.stat(partialPath);
+    return { offset: size };
+  }
+
+  async finalizeChunkedUpload(
+    auth: AuthDto,
+    uploadId: string,
+    dto: AssetMediaCreateDto,
+  ): Promise<AssetMediaResponseDto> {
+    auth = requireUploadAccess(auth);
+    const { folder, partialPath } = this.getChunkedUploadPaths(auth, uploadId);
+    const finalPath = StorageCore.getNestedPath(
+      StorageFolder.Upload,
+      auth.user.id,
+      `${uploadId}${getFilenameExtension(dto.filename || '')}`,
+    );
+    this.storageRepository.mkdirSync(folder);
+
+    if (!this.storageRepository.existsSync(partialPath)) {
+      throw new NotFoundException('Chunked upload not found');
+    }
+
+    await this.storageRepository.rename(partialPath, finalPath);
+
+    const { checksum, size } = await this.hashFile(finalPath);
+
+    return this.uploadAsset(auth, dto, {
+      uuid: uploadId,
+      checksum,
+      originalPath: finalPath,
+      originalName: dto.filename || '',
+      size,
+    });
+  }
+
+  async deleteChunkedUpload(auth: AuthDto, uploadId: string): Promise<void> {
+    auth = requireUploadAccess(auth);
+    await this.storageRepository.unlink(this.getChunkedUploadPaths(auth, uploadId).partialPath);
+  }
+
+  private getChunkedUploadPaths(auth: AuthDto, uploadId: string) {
+    return {
+      folder: StorageCore.getNestedFolder(StorageFolder.Upload, auth.user.id, uploadId),
+      partialPath: StorageCore.getNestedPath(StorageFolder.Upload, auth.user.id, `${uploadId}.part`),
+    };
+  }
+
+  private async hashFile(filepath: string): Promise<{ checksum: Buffer; size: number }> {
+    const hash = createHash('sha1');
+    await new Promise<void>((resolve, reject) => {
+      pipeline(
+        this.storageRepository.createPlainReadStream(filepath),
+        new Writable({
+          write(chunk, _encoding, callback) {
+            hash.update(chunk);
+            callback();
+          },
+        }),
+        (error) => (error ? reject(error) : resolve()),
+      );
+    });
+    const { size } = await this.storageRepository.stat(filepath);
+    return { checksum: hash.digest(), size };
   }
 
   private async addToSharedLink(sharedLink: AuthSharedLink, assetId: string) {

@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  ConflictException,
   InternalServerErrorException,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Readable, Writable } from 'node:stream';
 import { AssetFile } from 'src/database';
 import { AssetMediaStatus, AssetRejectReason, AssetUploadAction } from 'src/dtos/asset-media-response.dto';
 import { AssetMediaCreateDto, AssetMediaSize, UploadFieldName } from 'src/dtos/asset-media.dto';
@@ -865,6 +867,104 @@ describe(AssetMediaService.name, () => {
       expect(mocks.job.queue).toHaveBeenCalledWith({
         name: JobName.FileDelete,
         data: { files: [expect.stringContaining('/data/upload/user-id/ra/nd/random-uuid.jpg')] },
+      });
+    });
+  });
+
+  describe('chunked upload', () => {
+    const uploadId = '9f8c2c3e-5b1a-4c7d-8e2f-1a2b3c4d5e6f';
+
+    describe('initChunkedUpload', () => {
+      it('should create the upload folder and return an upload id', async () => {
+        await expect(sut.initChunkedUpload(authStub.user1)).resolves.toEqual({ uploadId: expect.any(String) });
+
+        expect(mocks.storage.mkdirSync).toHaveBeenCalled();
+      });
+
+      it('should reject unauthenticated requests', () => {
+        expect(() => sut.initChunkedUpload(null as any)).toThrow(UnauthorizedException);
+      });
+    });
+
+    describe('getChunkedUploadStatus', () => {
+      it('should return offset 0 when the partial file is absent', async () => {
+        mocks.storage.existsSync.mockReturnValue(false);
+
+        await expect(sut.getChunkedUploadStatus(authStub.user1, uploadId)).resolves.toEqual({ offset: 0 });
+      });
+
+      it('should return the committed size', async () => {
+        mocks.storage.existsSync.mockReturnValue(true);
+        mocks.storage.stat.mockResolvedValue({ size: 123 } as any);
+
+        await expect(sut.getChunkedUploadStatus(authStub.user1, uploadId)).resolves.toEqual({ offset: 123 });
+      });
+    });
+
+    describe('uploadChunk', () => {
+      it('should reject a chunk with a mismatched offset', async () => {
+        mocks.storage.existsSync.mockReturnValue(true);
+        mocks.storage.stat.mockResolvedValue({ size: 100 } as any);
+
+        await expect(sut.uploadChunk(authStub.user1, uploadId, 50, Readable.from([]))).rejects.toBeInstanceOf(
+          ConflictException,
+        );
+      });
+
+      it('should append a chunk and return the new size', async () => {
+        mocks.storage.existsSync.mockReturnValue(false);
+        mocks.storage.createAppendStream.mockReturnValue(
+          new Writable({
+            write(_chunk, _encoding, callback) {
+              callback();
+            },
+          }),
+        );
+        mocks.storage.stat.mockResolvedValue({ size: 3 } as any);
+
+        await expect(
+          sut.uploadChunk(authStub.user1, uploadId, 0, Readable.from([Buffer.from('abc')])),
+        ).resolves.toEqual({ offset: 3 });
+
+        expect(mocks.storage.createAppendStream).toHaveBeenCalled();
+      });
+    });
+
+    describe('finalizeChunkedUpload', () => {
+      it('should reject finalizing a missing upload', async () => {
+        mocks.storage.existsSync.mockReturnValue(false);
+
+        await expect(
+          sut.finalizeChunkedUpload(authStub.user1, uploadId, { ...createDto, filename: 'image.jpeg' }),
+        ).rejects.toBeInstanceOf(NotFoundException);
+      });
+
+      it('should assemble the chunks and create the asset', async () => {
+        mocks.storage.existsSync.mockReturnValue(true);
+        mocks.storage.rename.mockResolvedValue();
+        mocks.storage.createPlainReadStream.mockReturnValue(Readable.from([Buffer.from('file content')]));
+        mocks.storage.stat.mockResolvedValue({ size: 42 } as any);
+        mocks.asset.create.mockResolvedValue(assetEntity);
+
+        await expect(
+          sut.finalizeChunkedUpload(authStub.user1, uploadId, { ...createDto, filename: 'image.jpeg' }),
+        ).resolves.toEqual({ id: 'id_1', status: AssetMediaStatus.CREATED });
+
+        expect(mocks.storage.rename).toHaveBeenCalledWith(
+          expect.stringContaining(`${uploadId}.part`),
+          expect.stringContaining(`${uploadId}.jpeg`),
+        );
+        expect(mocks.asset.create).toHaveBeenCalled();
+      });
+    });
+
+    describe('deleteChunkedUpload', () => {
+      it('should delete the partial file', async () => {
+        mocks.storage.unlink.mockResolvedValue();
+
+        await sut.deleteChunkedUpload(authStub.user1, uploadId);
+
+        expect(mocks.storage.unlink).toHaveBeenCalledWith(expect.stringContaining(`${uploadId}.part`));
       });
     });
   });

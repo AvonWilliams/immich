@@ -147,6 +147,7 @@ describe(ServerService.name, () => {
         search: true,
         sidecar: true,
         configFile: false,
+        chunkedUpload: true,
         trash: true,
         email: false,
         realtimeTranscoding: false,

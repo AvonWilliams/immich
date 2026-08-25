@@ -105,6 +105,7 @@ export class ServerService extends BaseService {
       ocr: isOcrEnabled(machineLearning),
       passwordLogin: passwordLogin.enabled,
       configFile: !!configFile,
+      chunkedUpload: true,
       email: notifications.smtp.enabled,
       realtimeTranscoding: ffmpeg.realtime.enabled,
     };

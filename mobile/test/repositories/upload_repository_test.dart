@@ -7,10 +7,11 @@ import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
-import 'package:immich_mobile/data/db/main/database.dart';
+import 'package:immich_mobile/constants/constants.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/domain/services/store.service.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
+import 'package:immich_mobile/data/db/main/database.dart';
 import 'package:immich_mobile/infrastructure/repositories/store.repository.dart';
 import 'package:immich_mobile/repositories/upload.repository.dart';
 import 'package:mocktail/mocktail.dart';
@@ -37,6 +38,7 @@ void main() {
     await StoreService.init(storeRepository: StoreRepository(db));
     await Store.put(StoreKey.serverEndpoint, 'http://demo.immich.app/api');
     registerFallbackValue(_FakeBaseRequest());
+    registerFallbackValue(Uri.parse('http://example.com'));
     file = File('${Directory.systemTemp.createTempSync().path}/photo.jpg')..writeAsStringSync('bytes');
   });
 
@@ -123,5 +125,143 @@ void main() {
     expect(result.statusCode, 500);
     expect(result.errorMessage, 'boom');
     verify(() => client.send(any())).called(1);
+  });
+
+  group('chunked upload', () {
+    late File bigFile;
+    const int bigSize = kChunkedUploadThresholdBytes + 1024 * 1024; // 100 MiB
+
+    setUpAll(() {
+      bigFile = File('${Directory.systemTemp.createTempSync().path}/big.mp4');
+      final randomAccessFile = bigFile.openSync(mode: FileMode.write);
+      randomAccessFile.truncateSync(bigSize);
+      randomAccessFile.closeSync();
+    });
+
+    http.Response httpResponse(String body, [int status = 200]) => http.Response(body, status);
+
+    void stubInit() {
+      when(
+        () => client.post(
+          any(),
+          headers: any(named: 'headers'),
+          body: any(named: 'body'),
+        ),
+      ).thenAnswer((_) async => httpResponse('{"uploadId":"upload-1"}', 201));
+    }
+
+    Future<UploadResult> uploadBig() => sut.uploadFile(
+      file: bigFile,
+      originalFileName: 'big.mp4',
+      fields: const {'deviceAssetId': 'a1'},
+      cancelToken: null,
+      logContext: 'big',
+      httpClient: client,
+    );
+
+    test('splits into equal parts under the limit and finalizes with the filename', () async {
+      stubInit();
+      final offsets = <int>[];
+      String? finalizedFilename;
+
+      when(() => client.send(any())).thenAnswer((invocation) async {
+        final request = invocation.positionalArguments.single as http.BaseRequest;
+        if (request.url.path.endsWith('/finalize')) {
+          finalizedFilename = (request as http.MultipartRequest).fields['filename'];
+          await request.finalize().drain<void>();
+          return response(201, '{"id":"remote-1"}');
+        }
+        offsets.add(int.parse(request.url.queryParameters['offset']!));
+        await request.finalize().drain<void>();
+        return response(200, '{}');
+      });
+
+      final result = await uploadBig();
+
+      expect(result.isSuccess, isTrue);
+      expect(result.remoteAssetId, 'remote-1');
+      expect(offsets, [0, (bigSize / 2).ceil()]);
+      expect(offsets.last, lessThan(kChunkedUploadThresholdBytes));
+      expect(finalizedFilename, 'big.mp4');
+    });
+
+    test('resumes from the committed offset after a transport failure', () async {
+      stubInit();
+      when(() => client.get(any())).thenAnswer((_) async => httpResponse('{"offset":0}', 200));
+      var chunkAttempts = 0;
+
+      when(() => client.send(any())).thenAnswer((invocation) async {
+        final request = invocation.positionalArguments.single as http.BaseRequest;
+        if (request.url.path.endsWith('/finalize')) {
+          await request.finalize().drain<void>();
+          return response(201, '{"id":"remote-1"}');
+        }
+        chunkAttempts++;
+        if (chunkAttempts == 1) {
+          throw http.ClientException('Broken pipe');
+        }
+        await request.finalize().drain<void>();
+        return response(200, '{}');
+      });
+
+      final result = await uploadBig();
+
+      expect(result.isSuccess, isTrue);
+      expect(chunkAttempts, 3);
+      verify(() => client.get(any())).called(1);
+    });
+
+    test('cancel mid-chunk deletes the partial and returns cancelled', () async {
+      stubInit();
+      when(() => client.delete(any())).thenAnswer((_) async => httpResponse('', 204));
+
+      when(() => client.send(any())).thenAnswer((invocation) async {
+        final request = invocation.positionalArguments.single as http.BaseRequest;
+        if (request.url.path.endsWith('/finalize')) {
+          await request.finalize().drain<void>();
+          return response(201, '{"id":"remote-1"}');
+        }
+        throw http.RequestAbortedException();
+      });
+
+      final result = await uploadBig();
+
+      expect(result.isCancelled, isTrue);
+      verify(() => client.delete(any())).called(1);
+    });
+
+    test('reports smooth cumulative progress within each chunk', () async {
+      stubInit();
+      final progress = <int>[];
+
+      when(() => client.send(any())).thenAnswer((invocation) async {
+        final request = invocation.positionalArguments.single as http.BaseRequest;
+        if (request.url.path.endsWith('/finalize')) {
+          await request.finalize().drain<void>();
+          return response(201, '{"id":"remote-1"}');
+        }
+        await request.finalize().drain<void>();
+        return response(200, '{}');
+      });
+
+      final result = await sut.uploadFile(
+        file: bigFile,
+        originalFileName: 'big.mp4',
+        fields: const {'deviceAssetId': 'a1'},
+        cancelToken: null,
+        logContext: 'big',
+        httpClient: client,
+        onProgress: (bytes, totalBytes) => progress.add(bytes),
+      );
+
+      expect(result.isSuccess, isTrue);
+      // Progress must advance smoothly (far more callbacks than the 2 chunks)
+      // and be monotonically increasing up to the full file size.
+      expect(progress.length, greaterThan(2));
+      for (var i = 1; i < progress.length; i++) {
+        expect(progress[i], greaterThan(progress[i - 1]));
+      }
+      expect(progress.last, bigSize);
+    });
   });
 }

@@ -1,6 +1,7 @@
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/constants/constants.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/generated/translations.g.dart';
@@ -279,6 +280,7 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
   Widget _buildCurrentUploadCard(BuildContext context, UploadStatus item) {
     final double progressPercentage = (item.progress * 100).clamp(0, 100);
     final isFailed = item.isFailed == true;
+    final isChunked = item.fileSize > kChunkedUploadThresholdBytes;
 
     return Card(
       elevation: 0,
@@ -300,7 +302,7 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: SizedBox(
-            height: 64,
+            height: 76,
             child: Row(
               children: [
                 _CurrentUploadThumbnail(taskId: item.taskId),
@@ -319,7 +321,7 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
                       Text(
                         isFailed
                             ? item.error ?? context.t.errors.unable_to_upload_file
-                            : "${formatHumanReadableBytes(item.fileSize, 1)} • ${item.networkSpeedAsString}",
+                            : "${isChunked ? 'Chunked upload • ' : ''}${formatHumanReadableBytes(item.fileSize, 1)} • ${item.networkSpeedAsString}",
                         style: context.textTheme.labelLarge?.copyWith(
                           color: isFailed
                               ? context.colorScheme.error
@@ -330,15 +332,18 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
                       ),
                       if (!isFailed) ...[
                         const SizedBox(height: 8),
-                        ClipRRect(
-                          borderRadius: const BorderRadius.all(Radius.circular(4)),
-                          child: LinearProgressIndicator(
-                            value: item.progress,
-                            backgroundColor: context.colorScheme.primary.withValues(alpha: 0.2),
-                            valueColor: AlwaysStoppedAnimation(context.colorScheme.primary),
-                            minHeight: 4,
+                        if (isChunked)
+                          _buildChunkedProgressBar(context, item)
+                        else
+                          ClipRRect(
+                            borderRadius: const BorderRadius.all(Radius.circular(4)),
+                            child: LinearProgressIndicator(
+                              value: item.progress,
+                              backgroundColor: context.colorScheme.primary.withValues(alpha: 0.2),
+                              valueColor: AlwaysStoppedAnimation(context.colorScheme.primary),
+                              minHeight: 4,
+                            ),
                           ),
-                        ),
                       ],
                     ],
                   ),
@@ -361,6 +366,33 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// A segmented progress bar for chunked uploads: one segment per part, each
+  /// filling within its own window so per-chunk progress is visible.
+  Widget _buildChunkedProgressBar(BuildContext context, UploadStatus item) {
+    final numParts = (item.fileSize / kUploadMaxPartSizeBytes).ceil();
+    final partSize = item.fileSize / numParts;
+    final overallBytes = item.progress * item.fileSize;
+
+    return ClipRRect(
+      borderRadius: const BorderRadius.all(Radius.circular(4)),
+      child: Row(
+        children: [
+          for (var i = 0; i < numParts; i++) ...[
+            if (i > 0) const SizedBox(width: 2),
+            Expanded(
+              child: LinearProgressIndicator(
+                value: ((overallBytes - i * partSize) / partSize).clamp(0.0, 1.0),
+                backgroundColor: context.colorScheme.primary.withValues(alpha: 0.2),
+                valueColor: AlwaysStoppedAnimation(context.colorScheme.primary),
+                minHeight: 4,
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

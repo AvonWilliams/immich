@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -97,6 +98,18 @@ class UploadRepository {
     required String logContext,
     Client? httpClient,
   }) async {
+    if (file.lengthSync() > kChunkedUploadThresholdBytes) {
+      return uploadFileChunked(
+        file: file,
+        originalFileName: originalFileName,
+        fields: fields,
+        cancelToken: cancelToken,
+        onProgress: onProgress,
+        logContext: logContext,
+        httpClient: httpClient,
+      );
+    }
+
     final String savedEndpoint = Store.get(StoreKey.serverEndpoint);
 
     ProgressMultipartRequest buildRequest() {
@@ -159,6 +172,199 @@ class UploadRepository {
       return UploadResult.error(errorMessage: error.toString());
     }
   }
+
+  Future<UploadResult> uploadFileChunked({
+    required File file,
+    required String originalFileName,
+    required Map<String, String> fields,
+    required Completer<void>? cancelToken,
+    void Function(int bytes, int totalBytes)? onProgress,
+    required String logContext,
+    Client? httpClient,
+  }) async {
+    final String savedEndpoint = Store.get(StoreKey.serverEndpoint);
+    final client = httpClient ?? NetworkRepository.client;
+    final int totalBytes = file.lengthSync();
+    final int numParts = (totalBytes / kUploadMaxPartSizeBytes).ceil();
+    final int partSize = (totalBytes / numParts).ceil();
+
+    String? uploadId;
+
+    Future<void> cleanup() async {
+      final String? id = uploadId;
+      if (id == null) {
+        return;
+      }
+      try {
+        await client.delete(Uri.parse('$savedEndpoint/assets/upload/$id'));
+      } catch (error) {
+        logger.warning("Failed to clean up chunked upload $logContext: $error");
+      }
+    }
+
+    try {
+      // Initialize the chunked upload session.
+      Response initResponse;
+      try {
+        initResponse = await client.post(
+          Uri.parse('$savedEndpoint/assets/upload'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'filename': originalFileName, 'totalSize': totalBytes}),
+        );
+      } on ClientException catch (error) {
+        logger.warning("Chunked upload $logContext init failed before a response, retrying once: $error");
+        initResponse = await client.post(
+          Uri.parse('$savedEndpoint/assets/upload'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'filename': originalFileName, 'totalSize': totalBytes}),
+        );
+      }
+
+      if (![200, 201].contains(initResponse.statusCode)) {
+        return UploadResult.error(
+          statusCode: initResponse.statusCode,
+          errorMessage: _parseUploadError(initResponse.statusCode, initResponse.body),
+        );
+      }
+
+      uploadId = (jsonDecode(initResponse.body) as Map<String, dynamic>)['uploadId'] as String;
+
+      // Upload the file in equal-size parts, streaming each part from disk so
+      // only a small read buffer is held at a time. Buffering a whole ~99 MiB
+      // chunk per concurrent upload was exhausting the app's memory.
+      int offset = 0;
+      int retries = 0;
+      const int maxRetries = 5;
+
+      while (offset < totalBytes) {
+        final int readLength = min(partSize, totalBytes - offset);
+
+        try {
+          final request = ProgressStreamRequest(
+            'PUT',
+            Uri.parse('$savedEndpoint/assets/upload/$uploadId?offset=$offset'),
+            bodyStream: file.openRead(offset, offset + readLength),
+            contentLength: readLength,
+            abortTrigger: cancelToken?.future,
+            onProgress: (inChunkBytes, _) => onProgress?.call(offset + inChunkBytes, totalBytes),
+          );
+          request.headers['Content-Type'] = 'application/octet-stream';
+
+          final StreamedResponse response = await client.send(request).timeout(const Duration(seconds: 120));
+          final responseBodyString = await response.stream.bytesToString();
+
+          if (response.statusCode == 200 || response.statusCode == 201) {
+            offset += readLength;
+            retries = 0;
+          } else if (response.statusCode == 409) {
+            // Server committed fewer bytes than we sent; resync and re-read.
+            offset = (jsonDecode(responseBodyString) as Map<String, dynamic>)['offset'] as int;
+            retries = 0;
+          } else {
+            await cleanup();
+            return UploadResult.error(
+              statusCode: response.statusCode,
+              errorMessage: _parseUploadError(response.statusCode, responseBodyString),
+            );
+          }
+        } on RequestAbortedException {
+          rethrow;
+        } on Exception catch (error) {
+          retries++;
+          if (retries > maxRetries) {
+            rethrow;
+          }
+          offset = await _getChunkedUploadOffset(client, savedEndpoint, uploadId);
+          logger.warning("Chunked upload $logContext failed, resuming from offset $offset: $error");
+        }
+      }
+
+      // Finalize the upload with the same metadata fields as the single-shot path.
+      final ProgressMultipartRequest request = ProgressMultipartRequest(
+        'POST',
+        Uri.parse('$savedEndpoint/assets/upload/$uploadId/finalize'),
+        abortTrigger: cancelToken?.future,
+      );
+      request.fields.addAll(fields);
+      // The finalize request has no file part, so the filename must travel as a form field.
+      request.fields['filename'] = originalFileName;
+
+      StreamedResponse response;
+      try {
+        response = await client.send(request);
+      } on RequestAbortedException {
+        rethrow;
+      } on ClientException catch (error) {
+        logger.warning("Chunked upload $logContext finalize failed before a response, retrying once: $error");
+        response = await client.send(request);
+      }
+
+      final responseBodyString = await response.stream.bytesToString();
+
+      if (![200, 201].contains(response.statusCode)) {
+        await cleanup();
+        return UploadResult.error(
+          statusCode: response.statusCode,
+          errorMessage: _parseUploadError(response.statusCode, responseBodyString),
+        );
+      }
+
+      try {
+        final responseBody = jsonDecode(responseBodyString);
+        return UploadResult.success(remoteAssetId: responseBody['id'] as String);
+      } catch (e) {
+        return UploadResult.error(errorMessage: 'Failed to parse server response');
+      }
+    } on RequestAbortedException {
+      logger.warning("Upload $logContext was cancelled");
+      await cleanup();
+      return UploadResult.cancelled();
+    } catch (error, stackTrace) {
+      logger.warning("Error uploading $logContext: $error: $stackTrace");
+      await cleanup();
+      return UploadResult.error(errorMessage: error.toString());
+    }
+  }
+
+  String? _parseUploadError(int statusCode, String responseBody) {
+    if (statusCode == 413) {
+      return 'Error(413) File is too large to upload';
+    }
+
+    try {
+      final error = jsonDecode(responseBody);
+      return error['message'] ?? error['error'];
+    } catch (_) {
+      return responseBody.isNotEmpty ? responseBody : 'Upload failed with status $statusCode';
+    }
+  }
+
+  Future<int> _getChunkedUploadOffset(Client client, String savedEndpoint, String uploadId) async {
+    // Retry with a delay so a transient network drop (e.g. airplane mode) doesn't
+    // abort the upload before the network returns. A single immediate query would
+    // fail while the network is still down and force the whole upload to restart.
+    const int maxAttempts = 10;
+    const Duration retryDelay = Duration(seconds: 3);
+    for (var attempt = 0; ; attempt++) {
+      try {
+        final response = await client
+            .get(Uri.parse('$savedEndpoint/assets/upload/$uploadId'))
+            .timeout(const Duration(seconds: 15));
+        if (response.statusCode != 200) {
+          throw ClientException(
+            'Failed to query chunked upload status: ${response.statusCode}',
+            Uri.parse('$savedEndpoint/assets/upload/$uploadId'),
+          );
+        }
+        return (jsonDecode(response.body) as Map<String, dynamic>)['offset'] as int;
+      } catch (error) {
+        if (attempt >= maxAttempts - 1) {
+          rethrow;
+        }
+        await Future.delayed(retryDelay);
+      }
+    }
+  }
 }
 
 class ProgressMultipartRequest extends MultipartRequest with Abortable {
@@ -177,6 +383,47 @@ class ProgressMultipartRequest extends MultipartRequest with Abortable {
     }
 
     final total = contentLength;
+    var bytes = 0;
+    final stream = byteStream.transform(
+      StreamTransformer.fromHandlers(
+        handleData: (List<int> data, EventSink<List<int>> sink) {
+          bytes += data.length;
+          onProgress!(bytes, total);
+          sink.add(data);
+        },
+      ),
+    );
+    return ByteStream(stream);
+  }
+}
+
+class ProgressStreamRequest extends BaseRequest with Abortable {
+  ProgressStreamRequest(
+    super.method,
+    super.url, {
+    required this.bodyStream,
+    required int contentLength,
+    this.abortTrigger,
+    this.onProgress,
+  }) {
+    this.contentLength = contentLength;
+  }
+
+  @override
+  final Future<void>? abortTrigger;
+
+  final Stream<List<int>> bodyStream;
+  final void Function(int bytes, int totalBytes)? onProgress;
+
+  @override
+  ByteStream finalize() {
+    super.finalize();
+    final byteStream = ByteStream(bodyStream);
+    if (onProgress == null) {
+      return byteStream;
+    }
+
+    final total = contentLength ?? 0;
     var bytes = 0;
     final stream = byteStream.transform(
       StreamTransformer.fromHandlers(

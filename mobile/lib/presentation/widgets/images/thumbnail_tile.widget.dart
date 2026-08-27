@@ -1,6 +1,9 @@
+import 'dart:math' as math;
+
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/constants/constants.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/extensions/duration_extensions.dart';
@@ -198,7 +201,8 @@ class _ThumbnailTileState extends ConsumerState<ThumbnailTile> {
                       ),
                     ),
                   ),
-                if (uploadProgress != null) _UploadProgressOverlay(progress: uploadProgress),
+                if (uploadProgress != null)
+                  _UploadProgressOverlay(progress: uploadProgress.progress, totalBytes: uploadProgress.totalBytes),
               ],
             ),
           ),
@@ -341,13 +345,16 @@ class _StackIndicator extends StatelessWidget {
 
 class _UploadProgressOverlay extends StatelessWidget {
   final double progress;
+  final int totalBytes;
 
-  const _UploadProgressOverlay({required this.progress});
+  const _UploadProgressOverlay({required this.progress, this.totalBytes = 0});
 
   @override
   Widget build(BuildContext context) {
     final isError = progress < 0;
     final percentage = isError ? 0 : (progress * 100).toInt();
+    final isChunked = totalBytes > kChunkedUploadThresholdBytes;
+    final numParts = isChunked ? (totalBytes / kUploadMaxPartSizeBytes).ceil() : 0;
 
     return Positioned.fill(
       child: ColoredBox(
@@ -362,22 +369,78 @@ class _UploadProgressOverlay extends StatelessWidget {
                 SizedBox(
                   width: 36,
                   height: 36,
-                  child: CircularProgressIndicator(
-                    value: progress,
-                    strokeWidth: 3,
-                    backgroundColor: Colors.white24,
-                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-                  ),
+                  child: isChunked
+                      ? CustomPaint(
+                          painter: _SegmentedRingPainter(progress: progress, numParts: numParts),
+                          size: const Size(36, 36),
+                        )
+                      : CircularProgressIndicator(
+                          value: progress,
+                          strokeWidth: 3,
+                          backgroundColor: Colors.white24,
+                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
                 ),
               const SizedBox(height: 4),
               Text(
                 isError ? 'Error' : '$percentage%',
                 style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
               ),
+              if (isChunked && !isError) const Text('chunked', style: TextStyle(color: Colors.white70, fontSize: 9)),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+/// A chunked-upload progress ring drawn as separate rounded "worm" arcs — one per
+/// chunk — with a gap between them, instead of a continuous ring with divider ticks.
+class _SegmentedRingPainter extends CustomPainter {
+  final double progress;
+  final int numParts;
+
+  const _SegmentedRingPainter({required this.progress, required this.numParts});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const strokeWidth = 3.9;
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (size.shortestSide - strokeWidth) / 2;
+    final rect = Rect.fromCircle(center: center, radius: radius);
+
+    final segmentAngle = math.pi * 2 / numParts;
+    // The rounded caps extend `strokeWidth / radius` radians into the gap on each
+    // side, so keep the gap at least that wide to avoid overlapping heads/tails.
+    final gapAngle = math.max(segmentAngle * 0.125, strokeWidth / radius);
+    final sweepAngle = math.max(segmentAngle - gapAngle, 0.0);
+
+    final trackPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..color = Colors.white24;
+
+    final progressPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..color = Colors.white;
+
+    final overallUnits = progress * numParts;
+
+    for (var i = 0; i < numParts; i++) {
+      final startAngle = -math.pi / 2 + i * segmentAngle + gapAngle / 2;
+      canvas.drawArc(rect, startAngle, sweepAngle, false, trackPaint);
+      final fill = (overallUnits - i).clamp(0.0, 1.0);
+      if (fill > 0) {
+        canvas.drawArc(rect, startAngle, sweepAngle * fill, false, progressPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _SegmentedRingPainter oldDelegate) =>
+      oldDelegate.progress != progress || oldDelegate.numParts != numParts;
 }

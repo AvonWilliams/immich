@@ -55,3 +55,10 @@ const int kLibraryTabIndex = 3;
 
 // Workaround for SQLite's variable limit (SQLITE_MAX_VARIABLE_NUMBER = 32766)
 const int kDriftMaxChunk = 32000;
+
+// Chunked upload
+// Files larger than the threshold are uploaded in equal-size parts. Each part is
+// kept below the ~100 MB Cloudflare Tunnel request limit (90 MiB ≈ 94.4 MB decimal
+// leaves a small margin) and the value can be tuned.
+const int kChunkedUploadThresholdBytes = 90 * 1024 * 1024; // 90 MiB
+const int kUploadMaxPartSizeBytes = 90 * 1024 * 1024; // 90 MiB

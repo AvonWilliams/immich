@@ -83,7 +83,8 @@ Future<void> uploadAssets(BuildContext context, WidgetRef ref, List<LocalAsset> 
       assets,
       cancelToken: cancelToken,
       callbacks: UploadCallbacks(
-        onProgress: (id, _, bytes, total) => progress.setProgress(id, total > 0 ? bytes / total : 0.0),
+        onProgress: (id, _, bytes, total) =>
+            progress.setProgress(id, total > 0 ? bytes / total : 0.0, totalBytes: total),
         onSuccess: (id, _) {
           uploaded.add(id);
           progress.remove(id);
@@ -113,9 +114,12 @@ class _UploadProgressDialog extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final progressMap = ref.watch(assetUploadProgressProvider);
 
-    final values = progressMap.values.where((value) => value >= 0).toList(growable: false);
+    final values = progressMap.values
+        .map((value) => value.progress)
+        .where((value) => value >= 0)
+        .toList(growable: false);
     final progress = values.isEmpty ? 0.0 : values.reduce((a, b) => a + b) / values.length;
-    final hasError = progressMap.values.any((value) => value < 0);
+    final hasError = progressMap.values.any((value) => value.progress < 0);
 
     return AlertDialog(
       title: Text(context.t.uploading),

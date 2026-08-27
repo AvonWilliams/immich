@@ -197,7 +197,7 @@ class ActionNotifier extends Notifier<void> {
         callbacks: UploadCallbacks(
           onProgress: (localAssetId, filename, bytes, totalBytes) {
             final progress = totalBytes > 0 ? bytes / totalBytes : 0.0;
-            progressNotifier.setProgress(localAssetId, progress);
+            progressNotifier.setProgress(localAssetId, progress, totalBytes: totalBytes);
           },
           onSuccess: (localAssetId, remoteAssetId) {
             remoteAssetIds.add(remoteAssetId);

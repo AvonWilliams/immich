@@ -13,6 +13,7 @@ abstract class ServerFeatures with _$ServerFeatures {
     required bool passwordLogin,
     @Default(false) bool ocr,
     @Default(false) bool smartSearch,
+    @Default(false) bool chunkedUpload,
   }) = _ServerFeatures;
 
   factory ServerFeatures.fromDto(ServerFeaturesDto dto) => ServerFeatures(
@@ -22,5 +23,6 @@ abstract class ServerFeatures with _$ServerFeatures {
     passwordLogin: dto.passwordLogin,
     ocr: dto.ocr,
     smartSearch: dto.smartSearch,
+    chunkedUpload: dto.chunkedUpload,
   );
 }

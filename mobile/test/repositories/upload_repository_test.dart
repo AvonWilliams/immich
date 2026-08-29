@@ -138,6 +138,10 @@ void main() {
       randomAccessFile.closeSync();
     });
 
+    setUp(() {
+      sut = UploadRepository(isChunkedUploadSupported: () => true);
+    });
+
     http.Response httpResponse(String body, [int status = 200]) => http.Response(body, status);
 
     void stubInit() {
@@ -158,6 +162,24 @@ void main() {
       logContext: 'big',
       httpClient: client,
     );
+
+    test('falls back to single-shot upload when chunked upload is not supported', () async {
+      sut = UploadRepository();
+
+      when(() => client.send(any())).thenAnswer((invocation) async {
+        final request = invocation.positionalArguments.single as http.BaseRequest;
+        expect(request.url.path, '/api/assets');
+        await request.finalize().drain<void>();
+        return response(201, '{"id":"remote-1"}');
+      });
+
+      final result = await uploadBig();
+
+      expect(result.isSuccess, isTrue);
+      expect(result.remoteAssetId, 'remote-1');
+      verify(() => client.send(any())).called(1);
+      verifyNever(() => client.post(any(), headers: any(named: 'headers'), body: any(named: 'body')));
+    });
 
     test('splits into equal parts under the limit and finalizes with the filename', () async {
       stubInit();

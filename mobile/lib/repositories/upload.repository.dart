@@ -10,16 +10,23 @@ import 'package:immich_mobile/constants/constants.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/infrastructure/repositories/network.repository.dart';
+import 'package:immich_mobile/providers/server_info.provider.dart';
 import 'package:logging/logging.dart';
 
-final uploadRepositoryProvider = Provider((ref) => UploadRepository());
+final uploadRepositoryProvider = Provider(
+  (ref) => UploadRepository(
+    isChunkedUploadSupported: () => ref.read(serverInfoProvider).serverFeatures.chunkedUpload,
+  ),
+);
 
 class UploadRepository {
   final Logger logger = Logger('UploadRepository');
   void Function(TaskStatusUpdate)? onUploadStatus;
   void Function(TaskProgressUpdate)? onTaskProgress;
+  final bool Function() _isChunkedUploadSupported;
 
-  UploadRepository() {
+  UploadRepository({bool Function()? isChunkedUploadSupported})
+    : _isChunkedUploadSupported = isChunkedUploadSupported ?? (() => false) {
     FileDownloader().registerCallbacks(
       group: kBackupGroup,
       taskStatusCallback: (update) => onUploadStatus?.call(update),
@@ -67,7 +74,7 @@ class UploadRepository {
     required String logContext,
     Client? httpClient,
   }) async {
-    if (file.lengthSync() > kChunkedUploadThresholdBytes) {
+    if (_isChunkedUploadSupported() && file.lengthSync() > kChunkedUploadThresholdBytes) {
       return uploadFileChunked(
         file: file,
         originalFileName: originalFileName,

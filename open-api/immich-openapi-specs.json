@@ -27248,6 +27248,10 @@
       },
       "ServerFeaturesDto": {
         "properties": {
+          "chunkedUpload": {
+            "description": "Whether chunked upload is supported",
+            "type": "boolean"
+          },
           "configFile": {
             "description": "Whether config file is available",
             "type": "boolean"
@@ -27314,6 +27318,7 @@
           }
         },
         "required": [
+          "chunkedUpload",
           "configFile",
           "duplicateDetection",
           "email",

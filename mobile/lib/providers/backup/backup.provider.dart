@@ -181,7 +181,7 @@ class BackupNotifier extends StateNotifier<BackupState> {
       return;
     }
 
-    final progress = totalBytes > 0 ? bytes / totalBytes : 0.0;
+    final progress = totalBytes > 0 ? (bytes / totalBytes).clamp(0.0, 1.0) : 0.0;
     final networkSpeedAsString = _uploadSpeedManager.updateProgress(localAssetId, bytes, totalBytes);
     final currentItem = state.uploadItems[localAssetId];
     if (currentItem != null) {

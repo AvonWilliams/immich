@@ -2,9 +2,10 @@ import 'dart:async';
 
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
-/// Per-asset upload progress: [progress] is 0.0..1.0 (or -1.0 for error) and
-/// [totalBytes] is the total file size (used to detect chunked uploads).
-typedef AssetUploadProgress = ({double progress, int totalBytes});
+/// Per-asset upload progress: [progress] is 0.0..1.0 (or -1.0 for error),
+/// [totalBytes] is the total file size (used to detect chunked uploads), and
+/// [speed] is a human-readable transfer rate.
+typedef AssetUploadProgress = ({double progress, int totalBytes, String speed});
 
 /// Tracks per-asset upload progress.
 /// Key: local asset ID
@@ -14,12 +15,12 @@ class AssetUploadProgressNotifier extends Notifier<Map<String, AssetUploadProgre
   @override
   Map<String, AssetUploadProgress> build() => {};
 
-  void setProgress(String localAssetId, double progress, {int totalBytes = 0}) {
-    state = {...state, localAssetId: (progress: progress, totalBytes: totalBytes)};
+  void setProgress(String localAssetId, double progress, {int totalBytes = 0, String speed = '-- MB/s'}) {
+    state = {...state, localAssetId: (progress: progress, totalBytes: totalBytes, speed: speed)};
   }
 
   void setError(String localAssetId) {
-    state = {...state, localAssetId: (progress: errorValue, totalBytes: 0)};
+    state = {...state, localAssetId: (progress: errorValue, totalBytes: 0, speed: '-- MB/s')};
   }
 
   void remove(String localAssetId) {

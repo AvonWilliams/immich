@@ -10,6 +10,7 @@ import 'package:immich_mobile/providers/backup/asset_upload_progress.provider.da
 import 'package:immich_mobile/providers/infrastructure/toast.provider.dart';
 import 'package:immich_mobile/services/foreground_upload.service.dart';
 import 'package:immich_mobile/utils/error_handler.dart';
+import 'package:immich_mobile/utils/upload_speed_calculator.dart';
 import 'package:immich_ui/immich_ui.dart';
 
 final _stateProvider = Provider.family.autoDispose<List<LocalAsset>?, ActionSource>((ref, source) {
@@ -68,6 +69,7 @@ Future<void> uploadAssets(BuildContext context, WidgetRef ref, List<LocalAsset> 
   final uploads = ref.read(foregroundUploadServiceProvider);
   final toastService = ref.read(toastServiceProvider);
   final errorMessage = context.t.scaffold_body_error_occurred;
+  final speedManager = UploadSpeedManager();
 
   final cancelToken = Completer<void>();
   ref.read(manualUploadCancelTokenProvider.notifier).state = cancelToken;
@@ -83,8 +85,10 @@ Future<void> uploadAssets(BuildContext context, WidgetRef ref, List<LocalAsset> 
       assets,
       cancelToken: cancelToken,
       callbacks: UploadCallbacks(
-        onProgress: (id, _, bytes, total) =>
-            progress.setProgress(id, total > 0 ? bytes / total : 0.0, totalBytes: total),
+        onProgress: (id, _, bytes, total) {
+          final speed = speedManager.updateProgress(id, bytes, total);
+          progress.setProgress(id, total > 0 ? (bytes / total).clamp(0.0, 1.0) : 0.0, totalBytes: total, speed: speed);
+        },
         onSuccess: (id, _) {
           uploaded.add(id);
           progress.remove(id);

@@ -193,9 +193,11 @@ void main() {
           await request.finalize().drain<void>();
           return response(201, '{"id":"remote-1"}');
         }
-        offsets.add(int.parse(request.url.queryParameters['offset']!));
+        final offset = int.parse(request.url.queryParameters['offset']!);
+        offsets.add(offset);
+        final committed = offset + (request.contentLength ?? 0);
         await request.finalize().drain<void>();
-        return response(200, '{}');
+        return response(200, '{"offset": $committed}');
       });
 
       final result = await uploadBig();
@@ -222,8 +224,10 @@ void main() {
         if (chunkAttempts == 1) {
           throw http.ClientException('Broken pipe');
         }
+        final offset = int.parse(request.url.queryParameters['offset']!);
+        final committed = offset + (request.contentLength ?? 0);
         await request.finalize().drain<void>();
-        return response(200, '{}');
+        return response(200, '{"offset": $committed}');
       });
 
       final result = await uploadBig();
@@ -262,8 +266,10 @@ void main() {
           await request.finalize().drain<void>();
           return response(201, '{"id":"remote-1"}');
         }
+        final offset = int.parse(request.url.queryParameters['offset']!);
+        final committed = offset + (request.contentLength ?? 0);
         await request.finalize().drain<void>();
-        return response(200, '{}');
+        return response(200, '{"offset": $committed}');
       });
 
       final result = await sut.uploadFile(

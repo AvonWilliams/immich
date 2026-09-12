@@ -16,6 +16,7 @@ import 'package:immich_mobile/providers/timeline/multiselect.provider.dart';
 import 'package:immich_mobile/routing/router.dart';
 import 'package:immich_mobile/services/action.service.dart';
 import 'package:immich_mobile/services/foreground_upload.service.dart';
+import 'package:immich_mobile/utils/upload_speed_calculator.dart';
 import 'package:logging/logging.dart';
 
 final actionProvider = NotifierProvider<ActionNotifier, void>(ActionNotifier.new, dependencies: [multiSelectProvider]);
@@ -194,6 +195,7 @@ class ActionNotifier extends Notifier<void> {
     }
 
     final progressNotifier = ref.read(assetUploadProgressProvider.notifier);
+    final speedManager = UploadSpeedManager();
     final cancelToken = Completer<void>();
     ref.read(manualUploadCancelTokenProvider.notifier).state = cancelToken;
     final remoteAssetIds = <String>[];
@@ -209,8 +211,9 @@ class ActionNotifier extends Notifier<void> {
         cancelToken: cancelToken,
         callbacks: UploadCallbacks(
           onProgress: (localAssetId, filename, bytes, totalBytes) {
-            final progress = totalBytes > 0 ? bytes / totalBytes : 0.0;
-            progressNotifier.setProgress(localAssetId, progress, totalBytes: totalBytes);
+            final progress = totalBytes > 0 ? (bytes / totalBytes).clamp(0.0, 1.0) : 0.0;
+            final speed = speedManager.updateProgress(localAssetId, bytes, totalBytes);
+            progressNotifier.setProgress(localAssetId, progress, totalBytes: totalBytes, speed: speed);
           },
           onSuccess: (localAssetId, remoteAssetId) {
             remoteAssetIds.add(remoteAssetId);

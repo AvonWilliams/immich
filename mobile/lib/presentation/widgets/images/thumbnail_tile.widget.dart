@@ -202,7 +202,11 @@ class _ThumbnailTileState extends ConsumerState<ThumbnailTile> {
                     ),
                   ),
                 if (uploadProgress != null)
-                  _UploadProgressOverlay(progress: uploadProgress.progress, totalBytes: uploadProgress.totalBytes),
+                  _UploadProgressOverlay(
+                    progress: uploadProgress.progress,
+                    totalBytes: uploadProgress.totalBytes,
+                    speed: uploadProgress.speed,
+                  ),
               ],
             ),
           ),
@@ -346,8 +350,9 @@ class _StackIndicator extends StatelessWidget {
 class _UploadProgressOverlay extends StatelessWidget {
   final double progress;
   final int totalBytes;
+  final String speed;
 
-  const _UploadProgressOverlay({required this.progress, this.totalBytes = 0});
+  const _UploadProgressOverlay({required this.progress, this.totalBytes = 0, this.speed = '-- MB/s'});
 
   @override
   Widget build(BuildContext context) {
@@ -355,6 +360,7 @@ class _UploadProgressOverlay extends StatelessWidget {
     final percentage = isError ? 0 : (progress * 100).toInt();
     final isChunked = totalBytes > kChunkedUploadThresholdBytes;
     final numParts = isChunked ? (totalBytes / kUploadMaxPartSizeBytes).ceil() : 0;
+    final currentPart = isChunked ? (progress * numParts).floor().clamp(0, numParts - 1) + 1 : 0;
 
     return Positioned.fill(
       child: ColoredBox(
@@ -386,7 +392,9 @@ class _UploadProgressOverlay extends StatelessWidget {
                 isError ? 'Error' : '$percentage%',
                 style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
               ),
-              if (isChunked && !isError) const Text('chunked', style: TextStyle(color: Colors.white70, fontSize: 9)),
+              if (isChunked && !isError)
+                Text('chunked $currentPart/$numParts', style: const TextStyle(color: Colors.white70, fontSize: 9)),
+              if (!isError) Text(speed, style: const TextStyle(color: Colors.white54, fontSize: 9)),
             ],
           ),
         ),

@@ -241,7 +241,7 @@ class UploadRepository {
       // chunk per concurrent upload was exhausting the app's memory.
       int offset = 0;
       int retries = 0;
-      const int maxRetries = 5;
+      const int maxRetries = 15;
 
       while (offset < totalBytes) {
         final int readLength = min(partSize, totalBytes - offset);
@@ -257,11 +257,17 @@ class UploadRepository {
           );
           request.headers['Content-Type'] = 'application/octet-stream';
 
-          final StreamedResponse response = await client.send(request).timeout(const Duration(seconds: 120));
+          final StreamedResponse response = await client.send(request).timeout(const Duration(seconds: 3600));
           final responseBodyString = await response.stream.bytesToString();
 
           if (response.statusCode == 200 || response.statusCode == 201) {
-            offset += readLength;
+            // The server reports the true committed offset, which may be less than
+            // `offset + readLength` if the body was truncated (e.g. by a proxy or
+            // tunnel). Trust it rather than advancing blindly, so a partial commit
+            // doesn't desync the client and make the progress jump around.
+            final committed = (jsonDecode(responseBodyString) as Map<String, dynamic>)['offset'] as int;
+            dPrint(() => "Chunked upload: committed=$committed expected=${offset + readLength} total=$totalBytes");
+            offset = committed;
             retries = 0;
           } else if (response.statusCode == 409) {
             // Server committed fewer bytes than we sent; resync and re-read.
@@ -281,35 +287,40 @@ class UploadRepository {
           if (retries > maxRetries) {
             rethrow;
           }
+          dPrint(() => "Chunked upload $logContext failed (retry $retries/$maxRetries): $error");
           offset = await _getChunkedUploadOffset(client, savedEndpoint, uploadId);
           logger.warning("Chunked upload $logContext failed, resuming from offset $offset: $error");
         }
       }
 
       // Finalize the upload with the same metadata fields as the single-shot path.
-      final ProgressMultipartRequest request = ProgressMultipartRequest(
-        'POST',
-        Uri.parse('$savedEndpoint/assets/upload/$uploadId/finalize'),
-        abortTrigger: cancelToken?.future,
-      );
-      request.fields.addAll(fields);
-      // The finalize request has no file part, so the filename must travel as a form field.
-      request.fields['filename'] = originalFileName;
+      ProgressMultipartRequest buildFinalizeRequest() {
+        final request = ProgressMultipartRequest(
+          'POST',
+          Uri.parse('$savedEndpoint/assets/upload/$uploadId/finalize'),
+          abortTrigger: cancelToken?.future,
+        );
+        request.fields.addAll(fields);
+        // The finalize request has no file part, so the filename must travel as a form field.
+        request.fields['filename'] = originalFileName;
+        return request;
+      }
 
       StreamedResponse response;
       try {
-        response = await client.send(request);
+        response = await client.send(buildFinalizeRequest());
       } on RequestAbortedException {
         rethrow;
       } on ClientException catch (error) {
         logger.warning("Chunked upload $logContext finalize failed before a response, retrying once: $error");
-        response = await client.send(request);
+        response = await client.send(buildFinalizeRequest());
       }
 
       final responseBodyString = await response.stream.bytesToString();
 
       if (![200, 201].contains(response.statusCode)) {
         await cleanup();
+        dPrint(() => "Chunked upload $logContext finalize failed: ${response.statusCode} $responseBodyString");
         return UploadResult.error(
           statusCode: response.statusCode,
           errorMessage: _parseUploadError(response.statusCode, responseBodyString),

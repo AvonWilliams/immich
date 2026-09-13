@@ -8,7 +8,7 @@ import {
 import { Readable, Writable } from 'node:stream';
 import { AssetFile } from 'src/database';
 import { AssetMediaStatus, AssetRejectReason, AssetUploadAction } from 'src/dtos/asset-media-response.dto';
-import { AssetMediaCreateDto, AssetMediaSize, UploadFieldName } from 'src/dtos/asset-media.dto';
+import { AssetMediaCreateDto, AssetMediaSize, AssetMediaUploadInitDto, UploadFieldName } from 'src/dtos/asset-media.dto';
 import { MapAsset } from 'src/dtos/asset-response.dto';
 import { AssetEditAction } from 'src/dtos/editing.dto';
 import { AssetFileType, AssetType, AssetVisibility, CacheControl, JobName } from 'src/enum';
@@ -873,16 +873,31 @@ describe(AssetMediaService.name, () => {
 
   describe('chunked upload', () => {
     const uploadId = '9f8c2c3e-5b1a-4c7d-8e2f-1a2b3c4d5e6f';
+    const uploadInitDto = {
+      filename: 'image.jpeg',
+      totalSize: 100,
+      chunkCount: 1,
+      chunkSize: 100,
+      chunkHashes: ['ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'],
+    } as AssetMediaUploadInitDto;
 
     describe('initChunkedUpload', () => {
-      it('should create the upload folder and return an upload id', async () => {
-        await expect(sut.initChunkedUpload(authStub.user1)).resolves.toEqual({ uploadId: expect.any(String) });
+      it('should create the upload folder, persist the manifest and return an upload id', async () => {
+        mocks.storage.createOrOverwriteFile.mockResolvedValue(undefined);
+
+        await expect(sut.initChunkedUpload(authStub.user1, uploadInitDto)).resolves.toEqual({
+          uploadId: expect.any(String),
+        });
 
         expect(mocks.storage.mkdirSync).toHaveBeenCalled();
+        expect(mocks.storage.createOrOverwriteFile).toHaveBeenCalledWith(
+          expect.stringContaining('.manifest'),
+          expect.any(Buffer),
+        );
       });
 
-      it('should reject unauthenticated requests', () => {
-        expect(() => sut.initChunkedUpload(null as any)).toThrow(UnauthorizedException);
+      it('should reject unauthenticated requests', async () => {
+        await expect(sut.initChunkedUpload(null as any, uploadInitDto)).rejects.toBeInstanceOf(UnauthorizedException);
       });
     });
 
@@ -928,6 +943,26 @@ describe(AssetMediaService.name, () => {
 
         expect(mocks.storage.createAppendStream).toHaveBeenCalled();
       });
+
+      it('should reject a chunk whose hash does not match the manifest', async () => {
+        mocks.storage.existsSync.mockImplementation((path: string) => path.includes('.manifest'));
+        mocks.storage.readJsonFile.mockResolvedValue({
+          chunkCount: 1,
+          chunkSize: 3,
+          chunkHashes: ['0'.repeat(64)],
+        });
+        mocks.storage.createAppendStream.mockReturnValue(
+          new Writable({
+            write(_chunk, _encoding, callback) {
+              callback();
+            },
+          }),
+        );
+
+        await expect(
+          sut.uploadChunk(authStub.user1, uploadId, 0, Readable.from([Buffer.from('abc')])),
+        ).rejects.toMatchObject({ response: { chunkIndex: 0 } });
+      });
     });
 
     describe('finalizeChunkedUpload', () => {
@@ -959,12 +994,13 @@ describe(AssetMediaService.name, () => {
     });
 
     describe('deleteChunkedUpload', () => {
-      it('should delete the partial file', async () => {
+      it('should delete the partial file and manifest', async () => {
         mocks.storage.unlink.mockResolvedValue();
 
         await sut.deleteChunkedUpload(authStub.user1, uploadId);
 
         expect(mocks.storage.unlink).toHaveBeenCalledWith(expect.stringContaining(`${uploadId}.part`));
+        expect(mocks.storage.unlink).toHaveBeenCalledWith(expect.stringContaining(`${uploadId}.manifest`));
       });
     });
   });

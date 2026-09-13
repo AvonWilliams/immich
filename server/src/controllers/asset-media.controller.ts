@@ -103,8 +103,8 @@ export class AssetMediaController {
     description: 'Creates a new chunked upload session for the given asset.',
     history: new HistoryBuilder().added('v3.1.0').beta('v3.1.0'),
   })
-  initChunkedUpload(@Auth() auth: AuthDto, @Body() _dto: AssetMediaUploadInitDto): Promise<{ uploadId: string }> {
-    return this.service.initChunkedUpload(auth);
+  initChunkedUpload(@Auth() auth: AuthDto, @Body() dto: AssetMediaUploadInitDto): Promise<{ uploadId: string }> {
+    return this.service.initChunkedUpload(auth, dto);
   }
 
   @Put('upload/:uploadId')

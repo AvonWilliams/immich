@@ -181,6 +181,43 @@ void main() {
       verifyNever(() => client.post(any(), headers: any(named: 'headers'), body: any(named: 'body')));
     });
 
+    test('advertises per-chunk sha256 hashes in the init request', () async {
+      String? initBody;
+      when(
+        () => client.post(
+          any(),
+          headers: any(named: 'headers'),
+          body: any(named: 'body'),
+        ),
+      ).thenAnswer((invocation) async {
+        initBody = invocation.namedArguments[const Symbol('body')] as String?;
+        return httpResponse('{"uploadId":"upload-1"}', 201);
+      });
+
+      when(() => client.send(any())).thenAnswer((invocation) async {
+        final request = invocation.positionalArguments.single as http.BaseRequest;
+        if (request.url.path.endsWith('/finalize')) {
+          await request.finalize().drain<void>();
+          return response(201, '{"id":"remote-1"}');
+        }
+        final offset = int.parse(request.url.queryParameters['offset']!);
+        final committed = offset + (request.contentLength ?? 0);
+        await request.finalize().drain<void>();
+        return response(200, '{"offset": $committed}');
+      });
+
+      await uploadBig();
+
+      final body = jsonDecode(initBody!) as Map<String, dynamic>;
+      expect(body['chunkCount'], 2);
+      expect(body['chunkSize'], (bigSize / 2).ceil());
+      final chunkHashes = body['chunkHashes'] as List;
+      expect(chunkHashes, hasLength(2));
+      for (final hash in chunkHashes) {
+        expect(hash, matches(RegExp(r'^[0-9a-f]{64}$')));
+      }
+    });
+
     test('splits into equal parts under the limit and finalizes with the filename', () async {
       stubInit();
       final offsets = <int>[];

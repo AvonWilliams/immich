@@ -80,6 +80,12 @@ const AssetMediaUploadInitSchema = z
   .object({
     filename: z.string().describe('Filename of the asset'),
     totalSize: z.coerce.number().int().min(0).optional().describe('Total size of the asset in bytes'),
+    chunkCount: z.number().int().positive().describe('Number of chunks in the upload'),
+    chunkSize: z.number().int().positive().describe('Size of each chunk in bytes'),
+    chunkHashes: z
+      .array(z.string().regex(/^[0-9a-f]{64}$/))
+      .min(1)
+      .describe('SHA256 hash (hex) of each chunk'),
   })
   .meta({ id: 'AssetMediaUploadInitDto' });
 

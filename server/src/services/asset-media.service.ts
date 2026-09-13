@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
-import { pipeline, Readable, Writable } from 'node:stream';
+import { pipeline, Readable, Transform, Writable } from 'node:stream';
 import sanitize from 'sanitize-filename';
 import type { UploadFile, UploadRequest } from 'src/types.js';
 import { StorageCore } from 'src/cores/storage.core.js';
@@ -23,6 +23,7 @@ import {
   AssetMediaCreateDto,
   AssetMediaOptionsDto,
   AssetMediaSize,
+  AssetMediaUploadInitDto,
   UploadFieldName,
 } from 'src/dtos/asset-media.dto.js';
 import { AssetDownloadOriginalDto } from 'src/dtos/asset.dto.js';
@@ -353,17 +354,27 @@ export class AssetMediaService extends BaseService {
     };
   }
 
-  initChunkedUpload(auth: AuthDto): Promise<{ uploadId: string }> {
+  async initChunkedUpload(auth: AuthDto, dto: AssetMediaUploadInitDto): Promise<{ uploadId: string }> {
     auth = requireUploadAccess(auth);
     const uploadId = randomUUID();
-    const { folder } = this.getChunkedUploadPaths(auth, uploadId);
+    const { folder, manifestPath } = this.getChunkedUploadPaths(auth, uploadId);
     this.storageRepository.mkdirSync(folder);
-    return Promise.resolve({ uploadId });
+    await this.storageRepository.createOrOverwriteFile(
+      manifestPath,
+      Buffer.from(
+        JSON.stringify({
+          chunkCount: dto.chunkCount,
+          chunkSize: dto.chunkSize,
+          chunkHashes: dto.chunkHashes,
+        }),
+      ),
+    );
+    return { uploadId };
   }
 
   async uploadChunk(auth: AuthDto, uploadId: string, offset: number, request: Readable): Promise<{ offset: number }> {
     auth = requireUploadAccess(auth);
-    const { folder, partialPath } = this.getChunkedUploadPaths(auth, uploadId);
+const { folder, partialPath, manifestPath } = this.getChunkedUploadPaths(auth, uploadId);
     this.storageRepository.mkdirSync(folder);
 
     let current = 0;
@@ -375,11 +386,29 @@ export class AssetMediaService extends BaseService {
       throw new ConflictException({ offset: current });
     }
 
+    const manifest = await this.readChunkedUploadManifest(manifestPath);
+
+    const hash = createHash('sha256');
     await new Promise<void>((resolve, reject) => {
-      pipeline(request, this.storageRepository.createAppendStream(partialPath), (error) =>
-        error ? reject(error) : resolve(),
+      pipeline(
+        request,
+        new Transform({
+          transform(chunk, _encoding, callback) {
+            hash.update(chunk);
+            callback(null, chunk);
+          },
+        }),
+        this.storageRepository.createAppendStream(partialPath),
+        (error) => (error ? reject(error) : resolve()),
       );
     });
+
+    if (manifest) {
+      const chunkIndex = Math.floor(offset / manifest.chunkSize);
+      if (hash.digest('hex') !== manifest.chunkHashes[chunkIndex]) {
+        throw new ConflictException({ chunkIndex });
+      }
+    }
 
     const { size } = await this.storageRepository.stat(partialPath);
     return { offset: size };
@@ -401,7 +430,7 @@ export class AssetMediaService extends BaseService {
     dto: AssetMediaCreateDto,
   ): Promise<AssetMediaResponseDto> {
     auth = requireUploadAccess(auth);
-    const { folder, partialPath } = this.getChunkedUploadPaths(auth, uploadId);
+    const { folder, partialPath, manifestPath } = this.getChunkedUploadPaths(auth, uploadId);
     const finalPath = StorageCore.getNestedPath(
       StorageFolder.Upload,
       auth.user.id,
@@ -414,6 +443,7 @@ export class AssetMediaService extends BaseService {
     }
 
     await this.storageRepository.rename(partialPath, finalPath);
+    await this.storageRepository.unlink(manifestPath);
 
     const { checksum, size } = await this.hashFile(finalPath);
 
@@ -428,14 +458,28 @@ export class AssetMediaService extends BaseService {
 
   async deleteChunkedUpload(auth: AuthDto, uploadId: string): Promise<void> {
     auth = requireUploadAccess(auth);
-    await this.storageRepository.unlink(this.getChunkedUploadPaths(auth, uploadId).partialPath);
+    const { partialPath, manifestPath } = this.getChunkedUploadPaths(auth, uploadId);
+    await this.storageRepository.unlink(partialPath);
+    await this.storageRepository.unlink(manifestPath);
   }
 
   private getChunkedUploadPaths(auth: AuthDto, uploadId: string) {
     return {
       folder: StorageCore.getNestedFolder(StorageFolder.Upload, auth.user.id, uploadId),
       partialPath: StorageCore.getNestedPath(StorageFolder.Upload, auth.user.id, `${uploadId}.part`),
+      manifestPath: StorageCore.getNestedPath(StorageFolder.Upload, auth.user.id, `${uploadId}.manifest`),
     };
+  }
+
+  private async readChunkedUploadManifest(
+    manifestPath: string,
+  ): Promise<{ chunkCount: number; chunkSize: number; chunkHashes: string[] } | null> {
+    if (!this.storageRepository.existsSync(manifestPath)) {
+      return null;
+    }
+    return this.storageRepository.readJsonFile<{ chunkCount: number; chunkSize: number; chunkHashes: string[] }>(
+      manifestPath,
+    );
   }
 
   private async hashFile(filepath: string): Promise<{ checksum: Buffer; size: number }> {

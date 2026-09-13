@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:background_downloader/background_downloader.dart';
+import 'package:crypto/crypto.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:http/http.dart';
 import 'package:immich_mobile/constants/constants.dart';
@@ -164,6 +165,15 @@ class UploadRepository {
     final int numParts = (totalBytes / kUploadMaxPartSizeBytes).ceil();
     final int partSize = (totalBytes / numParts).ceil();
 
+    // Compute the sha256 of each chunk once, up front, so the init request can
+    // advertise them to the server for per-chunk integrity validation.
+    final List<String> chunkHashes = [];
+    for (var i = 0; i < numParts; i++) {
+      final int start = i * partSize;
+      final int end = min(start + partSize, totalBytes);
+      chunkHashes.add((await sha256.bind(file.openRead(start, end)).first).toString());
+    }
+
     String? uploadId;
 
     Future<void> cleanup() async {
@@ -185,14 +195,26 @@ class UploadRepository {
         initResponse = await client.post(
           Uri.parse('$savedEndpoint/assets/upload'),
           headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'filename': originalFileName, 'totalSize': totalBytes}),
+          body: jsonEncode({
+            'filename': originalFileName,
+            'totalSize': totalBytes,
+            'chunkCount': numParts,
+            'chunkSize': partSize,
+            'chunkHashes': chunkHashes,
+          }),
         );
       } on ClientException catch (error) {
         logger.warning("Chunked upload $logContext init failed before a response, retrying once: $error");
         initResponse = await client.post(
           Uri.parse('$savedEndpoint/assets/upload'),
           headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'filename': originalFileName, 'totalSize': totalBytes}),
+          body: jsonEncode({
+            'filename': originalFileName,
+            'totalSize': totalBytes,
+            'chunkCount': numParts,
+            'chunkSize': partSize,
+            'chunkHashes': chunkHashes,
+          }),
         );
       }
 

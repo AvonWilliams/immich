@@ -94,6 +94,10 @@ class ForegroundUploadService {
       return;
     }
 
+    debugPrint(
+      '[immich-upload] asset-select t=${DateTime.now().toIso8601String()} count=${candidates.length} ids=${candidates.map((a) => a.id).join(',')}',
+    );
+
     final networkCapabilities = await _connectivityApi.getCapabilities();
     final hasWifi = networkCapabilities.isUnmetered;
     _logger.info('Network capabilities: $networkCapabilities, hasWifi/isUnmetered: $hasWifi');
@@ -147,6 +151,10 @@ class ForegroundUploadService {
     if (localAssets.isEmpty) {
       return;
     }
+
+    debugPrint(
+      '[immich-upload] asset-select t=${DateTime.now().toIso8601String()} count=${localAssets.length} ids=${localAssets.map((a) => a.id).join(',')}',
+    );
 
     await _executeWithWorkerPool<LocalAsset>(
       items: localAssets,
@@ -247,6 +255,10 @@ class ForegroundUploadService {
     Completer<void>? cancelToken, {
     required UploadCallbacks callbacks,
   }) async {
+    final sw = Stopwatch()..start();
+    debugPrint(
+      '[immich-upload] bg-asset-start t=${DateTime.now().toIso8601String()} elapsedMs=${sw.elapsedMilliseconds} assetId=${asset.id} name=${asset.name}',
+    );
     final t = StaticTranslations.instance;
     final assetNotFoundOnDevice = CurrentPlatform.isAndroid
         ? t.asset_not_found_on_device_android
@@ -383,6 +395,9 @@ class ForegroundUploadService {
       );
 
       if (result.isSuccess && result.remoteAssetId != null) {
+        debugPrint(
+          '[immich-upload] upload-done t=${DateTime.now().toIso8601String()} elapsedMs=${sw.elapsedMilliseconds} assetId=${asset.id} remoteAssetId=${result.remoteAssetId}',
+        );
         callbacks.onSuccess?.call(asset.localId!, result.remoteAssetId!);
         try {
           await _assetService.stackEditedUpload(asset.localId!, result.remoteAssetId!, asset.checksum);
@@ -390,8 +405,14 @@ class ForegroundUploadService {
           _logger.warning("Failed to stack the upload of ${asset.localId}: $error");
         }
       } else if (result.isCancelled) {
+        debugPrint(
+          '[immich-upload] upload-error t=${DateTime.now().toIso8601String()} elapsedMs=${sw.elapsedMilliseconds} assetId=${asset.id} phase=cancelled',
+        );
         shouldAbortUpload = true;
       } else if (result.errorMessage != null) {
+        debugPrint(
+          '[immich-upload] upload-error t=${DateTime.now().toIso8601String()} elapsedMs=${sw.elapsedMilliseconds} assetId=${asset.id} status=${result.statusCode} msg=${result.errorMessage}',
+        );
         _logger.severe(
           () =>
               "Error(${result.statusCode}) uploading ${asset.localId} | $originalFileName | Created on ${asset.createdAt} | ${result.errorMessage}",
@@ -405,8 +426,14 @@ class ForegroundUploadService {
       }
     } catch (error, stackTrace) {
       _logger.severe(() => "Error backup asset: $error", stackTrace);
+      debugPrint(
+        '[immich-upload] upload-error t=${DateTime.now().toIso8601String()} elapsedMs=${sw.elapsedMilliseconds} assetId=${asset.id} error=$error stack=$stackTrace',
+      );
       callbacks.onError?.call(asset.localId!, error.toString());
     } finally {
+      debugPrint(
+        '[immich-upload] bg-asset-done t=${DateTime.now().toIso8601String()} elapsedMs=${sw.elapsedMilliseconds} assetId=${asset.id} name=${asset.name}',
+      );
       if (Platform.isIOS) {
         try {
           await file?.delete();

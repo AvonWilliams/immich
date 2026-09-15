@@ -147,6 +147,7 @@ class BackgroundUploadService {
   /// Finds backup candidates, builds upload tasks, and enqueues them
   /// for background processing.
   Future<void> uploadBackupCandidates(String userId) async {
+    dPrint(() => "[immich-upload] bg-job-start t=${DateTime.now().toIso8601String()} userId=$userId");
     await _storageRepository.clearCache();
     shouldAbortQueuingTasks = false;
 
@@ -157,6 +158,10 @@ class BackgroundUploadService {
     }
 
     _logger.info("Found ${candidates.length} backup candidates for background tasks");
+    dPrint(
+      () =>
+          "[immich-upload] asset-select t=${DateTime.now().toIso8601String()} count=${candidates.length} ids=${candidates.map((a) => a.id).join(',')}",
+    );
 
     const batchSize = 100;
     final batch = candidates.take(batchSize).toList();
@@ -195,8 +200,19 @@ class BackgroundUploadService {
   }
 
   Future<void> _handleTaskStatusUpdate(TaskStatusUpdate update) async {
+    if (update.status == TaskStatus.failed || update.status == TaskStatus.canceled) {
+      dPrint(
+        () =>
+            "[immich-upload] upload-error t=${DateTime.now().toIso8601String()} taskId=${update.task.taskId} status=${update.status} responseStatus=${update.responseStatusCode} error=${update.exception}",
+      );
+    }
+
     switch (update.status) {
       case TaskStatus.complete:
+        dPrint(
+          () =>
+              "[immich-upload] bg-asset-done t=${DateTime.now().toIso8601String()} taskId=${update.task.taskId} status=${update.status} responseStatus=${update.responseStatusCode}",
+        );
         unawaited(_handleLivePhoto(update));
         unawaited(_stackEditedAsset(update));
 
@@ -271,6 +287,10 @@ class BackgroundUploadService {
 
   @visibleForTesting
   Future<UploadTask?> getUploadTask(LocalAsset asset, {String group = kBackupGroup, int? priority}) async {
+    dPrint(
+      () =>
+          "[immich-upload] bg-asset-start t=${DateTime.now().toIso8601String()} assetId=${asset.id} name=${asset.name} group=$group",
+    );
     final entity = await _storageRepository.getAssetEntityForAsset(asset);
     if (entity == null) {
       _logger.warning("Asset entity not found for ${asset.id} - ${asset.name}");

@@ -140,6 +140,10 @@ class BackgroundWorkerBgService extends BackgroundWorkerFlutterApi {
 
   @override
   Future<void> onAndroidUpload(int? maxMinutes) async {
+    dPrint(
+      () =>
+          "[immich-upload] bg-job-start t=${DateTime.now().toIso8601String()} platform=android maxMinutes=$maxMinutes",
+    );
     final hashTimeout = Duration(minutes: _isBackupEnabled ? 3 : 6);
     final backupTimeout = maxMinutes != null ? Duration(minutes: maxMinutes - 1) : null;
     await _optimizeDB();
@@ -153,6 +157,10 @@ class BackgroundWorkerBgService extends BackgroundWorkerFlutterApi {
   @override
   Future<void> onIosUpload(bool isRefresh, int? maxSeconds) async {
     _logger.info('iOS background upload started with maxSeconds: ${maxSeconds}s');
+    dPrint(
+      () =>
+          "[immich-upload] bg-job-start t=${DateTime.now().toIso8601String()} platform=ios isRefresh=$isRefresh maxSeconds=$maxSeconds",
+    );
     final sw = Stopwatch()..start();
     try {
       final budget = maxSeconds != null ? Duration(seconds: maxSeconds - 1) : null;

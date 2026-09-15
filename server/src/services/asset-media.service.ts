@@ -355,9 +355,13 @@ export class AssetMediaService extends BaseService {
   }
 
   async initChunkedUpload(auth: AuthDto, dto: AssetMediaUploadInitDto): Promise<{ uploadId: string }> {
+    const start = Date.now();
     auth = requireUploadAccess(auth);
     const uploadId = randomUUID();
     const { folder, manifestPath } = this.getChunkedUploadPaths(auth, uploadId);
+    this.logger.log(
+      `[chunked-upload] init ENTRY t=${new Date().toISOString()} filename=${dto.filename} totalSize=${dto.totalSize ?? 'n/a'} chunkCount=${dto.chunkCount} chunkSize=${dto.chunkSize} hashesProvided=${dto.chunkHashes.length}`,
+    );
     this.storageRepository.mkdirSync(folder);
     await this.storageRepository.createOrOverwriteFile(
       manifestPath,
@@ -369,12 +373,16 @@ export class AssetMediaService extends BaseService {
         }),
       ),
     );
+    this.logger.log(
+      `[chunked-upload] init EXIT uploadId=${uploadId} folder=${folder} manifest=${manifestPath} elapsedMs=${Date.now() - start}`,
+    );
     return { uploadId };
   }
 
   async uploadChunk(auth: AuthDto, uploadId: string, offset: number, request: Readable): Promise<{ offset: number }> {
+    const start = Date.now();
     auth = requireUploadAccess(auth);
-const { folder, partialPath, manifestPath } = this.getChunkedUploadPaths(auth, uploadId);
+    const { folder, partialPath, manifestPath } = this.getChunkedUploadPaths(auth, uploadId);
     this.storageRepository.mkdirSync(folder);
 
     let current = 0;
@@ -382,7 +390,13 @@ const { folder, partialPath, manifestPath } = this.getChunkedUploadPaths(auth, u
       const { size } = await this.storageRepository.stat(partialPath);
       current = size;
     }
+    this.logger.log(
+      `[chunked-upload] append ENTRY uploadId=${uploadId} offset=${offset} committed=${current} t=${new Date().toISOString()}`,
+    );
     if (offset !== current) {
+      this.logger.warn(
+        `[chunked-upload] append OFFSET-MISMATCH uploadId=${uploadId} offset=${offset} committed=${current}`,
+      );
       throw new ConflictException({ offset: current });
     }
 
@@ -405,22 +419,49 @@ const { folder, partialPath, manifestPath } = this.getChunkedUploadPaths(auth, u
 
     if (manifest) {
       const chunkIndex = Math.floor(offset / manifest.chunkSize);
-      if (hash.digest('hex') !== manifest.chunkHashes[chunkIndex]) {
+      const receivedHash = hash.digest('hex');
+      if (receivedHash !== manifest.chunkHashes[chunkIndex]) {
+        this.logger.error(
+          `[chunked-upload] append sha256 FAIL uploadId=${uploadId} chunkIndex=${chunkIndex} offset=${offset} expected=${manifest.chunkHashes[chunkIndex]} received=${receivedHash}`,
+        );
         throw new ConflictException({ chunkIndex });
       }
+      this.logger.log(`[chunked-upload] append sha256 PASS uploadId=${uploadId} chunkIndex=${chunkIndex}`);
     }
 
     const { size } = await this.storageRepository.stat(partialPath);
+    this.logger.log(
+      `[chunked-upload] append EXIT uploadId=${uploadId} offset=${offset} bytesReceived=${size - offset} committed=${size} elapsedMs=${Date.now() - start}`,
+    );
     return { offset: size };
   }
 
   async getChunkedUploadStatus(auth: AuthDto, uploadId: string): Promise<{ offset: number }> {
+    const start = Date.now();
     auth = requireUploadAccess(auth);
-    const { partialPath } = this.getChunkedUploadPaths(auth, uploadId);
+    const { partialPath, manifestPath } = this.getChunkedUploadPaths(auth, uploadId);
+    this.logger.log(`[chunked-upload] status ENTRY uploadId=${uploadId} t=${new Date().toISOString()}`);
+
+    let expectedTotal = 'n/a';
+    try {
+      const manifest = await this.readChunkedUploadManifest(manifestPath);
+      if (manifest) {
+        expectedTotal = `${manifest.chunkCount * manifest.chunkSize}`;
+      }
+    } catch (error: any) {
+      this.logger.warn(`[chunked-upload] status manifest-read FAIL uploadId=${uploadId}: ${error?.message ?? error}`);
+    }
+
     if (!this.storageRepository.existsSync(partialPath)) {
+      this.logger.log(
+        `[chunked-upload] status EXIT uploadId=${uploadId} offset=0 expected=${expectedTotal} elapsedMs=${Date.now() - start}`,
+      );
       return { offset: 0 };
     }
     const { size } = await this.storageRepository.stat(partialPath);
+    this.logger.log(
+      `[chunked-upload] status EXIT uploadId=${uploadId} offset=${size} expected=${expectedTotal} elapsedMs=${Date.now() - start}`,
+    );
     return { offset: size };
   }
 
@@ -429,6 +470,7 @@ const { folder, partialPath, manifestPath } = this.getChunkedUploadPaths(auth, u
     uploadId: string,
     dto: AssetMediaCreateDto,
   ): Promise<AssetMediaResponseDto> {
+    const start = Date.now();
     auth = requireUploadAccess(auth);
     const { folder, partialPath, manifestPath } = this.getChunkedUploadPaths(auth, uploadId);
     const finalPath = StorageCore.getNestedPath(
@@ -438,29 +480,70 @@ const { folder, partialPath, manifestPath } = this.getChunkedUploadPaths(auth, u
     );
     this.storageRepository.mkdirSync(folder);
 
+    this.logger.log(`[chunked-upload] finalize ENTRY uploadId=${uploadId} filename=${dto.filename} t=${new Date().toISOString()}`);
+
     if (!this.storageRepository.existsSync(partialPath)) {
+      this.logger.error(`[chunked-upload] finalize FAIL uploadId=${uploadId} reason=partialNotFound`);
       throw new NotFoundException('Chunked upload not found');
     }
 
-    await this.storageRepository.rename(partialPath, finalPath);
-    await this.storageRepository.unlink(manifestPath);
+    let expectedBytes = 'n/a';
+    let receivedBytes = 'n/a';
+    try {
+      const manifest = await this.readChunkedUploadManifest(manifestPath);
+      if (manifest) {
+        expectedBytes = `${manifest.chunkCount * manifest.chunkSize}`;
+      }
+      const { size } = await this.storageRepository.stat(partialPath);
+      receivedBytes = `${size}`;
+    } catch (error: any) {
+      this.logger.error(
+        `[chunked-upload] finalize size-check ERROR uploadId=${uploadId} message=${error?.message ?? error}`,
+        error?.stack,
+      );
+    }
+    this.logger.log(
+      `[chunked-upload] finalize bytes uploadId=${uploadId} expected=${expectedBytes} received=${receivedBytes}`,
+    );
 
-    const { checksum, size } = await this.hashFile(finalPath);
+    try {
+      await this.storageRepository.rename(partialPath, finalPath);
+      await this.storageRepository.unlink(manifestPath);
 
-    return this.uploadAsset(auth, dto, {
-      uuid: uploadId,
-      checksum,
-      originalPath: finalPath,
-      originalName: dto.filename || '',
-      size,
-    });
+      const { checksum, size } = await this.hashFile(finalPath);
+      this.logger.log(
+        `[chunked-upload] finalize hash uploadId=${uploadId} finalPath=${finalPath} size=${size} sha1=${checksum.toString('hex')}`,
+      );
+
+      const result = await this.uploadAsset(auth, dto, {
+        uuid: uploadId,
+        checksum,
+        originalPath: finalPath,
+        originalName: dto.filename || '',
+        size,
+      });
+
+      this.logger.log(
+        `[chunked-upload] finalize EXIT uploadId=${uploadId} status=${result.status} assetId=${result.id} elapsedMs=${Date.now() - start}`,
+      );
+      return result;
+    } catch (error: any) {
+      this.logger.error(
+        `[chunked-upload] finalize ERROR uploadId=${uploadId} message=${error?.message ?? error} stack=${error?.stack}`,
+        error?.stack,
+      );
+      throw error;
+    }
   }
 
   async deleteChunkedUpload(auth: AuthDto, uploadId: string): Promise<void> {
+    const start = Date.now();
     auth = requireUploadAccess(auth);
     const { partialPath, manifestPath } = this.getChunkedUploadPaths(auth, uploadId);
+    this.logger.log(`[chunked-upload] delete ENTRY uploadId=${uploadId} t=${new Date().toISOString()}`);
     await this.storageRepository.unlink(partialPath);
     await this.storageRepository.unlink(manifestPath);
+    this.logger.log(`[chunked-upload] delete EXIT uploadId=${uploadId} elapsedMs=${Date.now() - start}`);
   }
 
   private getChunkedUploadPaths(auth: AuthDto, uploadId: string) {

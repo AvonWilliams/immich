@@ -262,6 +262,7 @@ class BackupNotifier extends StateNotifier<BackupState> {
       return;
     }
     _logger.info("Start background backup sequence");
+    debugPrint('[immich-upload] bg-job-start t=${DateTime.now().toIso8601String()} userId=$userId');
     state = state.copyWith(error: BackupError.none);
     final tasks = await _backgroundUploadService.getActiveTasks(kBackupGroup);
     if (!mounted) {

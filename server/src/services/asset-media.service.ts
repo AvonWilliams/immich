@@ -373,6 +373,7 @@ export class AssetMediaService extends BaseService {
       manifestPath,
       Buffer.from(
         JSON.stringify({
+          totalSize: dto.totalSize,
           chunkCount: dto.chunkCount,
           chunkSize: dto.chunkSize,
           chunkHashes: dto.chunkHashes,
@@ -503,17 +504,25 @@ export class AssetMediaService extends BaseService {
     let receivedBytes = 'n/a';
     try {
       const manifest = await this.readChunkedUploadManifest(manifestPath);
-      if (manifest) {
-        expectedBytes = `${manifest.chunkCount * manifest.chunkSize}`;
-      }
       const { size } = await this.storageRepository.stat(partialPath);
-      receivedBytes = `${size}`;
+      if (manifest) {
+        expectedBytes = `${manifest.totalSize ?? manifest.chunkCount * manifest.chunkSize}`;
+        receivedBytes = `${size}`;
+        if (manifest.totalSize != null && size !== manifest.totalSize) {
+          this.logger.error(
+            `[chunked-upload] finalize INCOMPLETE uploadId=${uploadId} expected=${manifest.totalSize} received=${size}`,
+          );
+          throw new BadRequestException('Chunked upload is incomplete');
+        }
+      }
     } catch (error: any) {
       this.logger.error(
         `[chunked-upload] finalize size-check ERROR uploadId=${uploadId} message=${error?.message ?? error}`,
         error?.stack,
       );
+      throw error;
     }
+    
     this.logger.log(
       `[chunked-upload] finalize bytes uploadId=${uploadId} expected=${expectedBytes} received=${receivedBytes}`,
     );
@@ -623,11 +632,16 @@ export class AssetMediaService extends BaseService {
 
   private async readChunkedUploadManifest(
     manifestPath: string,
-  ): Promise<{ chunkCount: number; chunkSize: number; chunkHashes: string[] } | null> {
+  ): Promise<{ chunkCount: number; chunkSize: number; chunkHashes: string[]; totalSize?: number } | null> {
     if (!this.storageRepository.existsSync(manifestPath)) {
       return null;
     }
-    return this.storageRepository.readJsonFile<{ chunkCount: number; chunkSize: number; chunkHashes: string[] }>(
+    return this.storageRepository.readJsonFile<{
+      chunkCount: number;
+      chunkSize: number;
+      chunkHashes: string[];
+      totalSize?: number;
+    }>(
       manifestPath,
     );
   }

@@ -363,6 +363,9 @@ export class AssetMediaService extends BaseService {
   async initChunkedUpload(auth: AuthDto, dto: AssetMediaUploadInitDto): Promise<{ uploadId: string }> {
     const start = Date.now();
     auth = requireUploadAccess(auth);
+    if (!mimeTypes.isAsset(dto.filename)) {
+      throw new BadRequestException(`Unsupported file type: ${getFilenameExtension(dto.filename)}`);
+    }
     const uploadId = randomUUID();
     const { folder, manifestPath } = this.getChunkedUploadPaths(auth, uploadId);
     this.logger.log(
@@ -522,7 +525,7 @@ export class AssetMediaService extends BaseService {
       );
       throw error;
     }
-    
+
     this.logger.log(
       `[chunked-upload] finalize bytes uploadId=${uploadId} expected=${expectedBytes} received=${receivedBytes}`,
     );

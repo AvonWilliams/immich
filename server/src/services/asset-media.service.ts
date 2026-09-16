@@ -406,7 +406,13 @@ export class AssetMediaService extends BaseService {
     this.logger.log(
       `[chunked-upload] append ENTRY uploadId=${uploadId} offset=${offset} committed=${current} t=${new Date().toISOString()}`,
     );
-    if (offset !== current) {
+    if (offset < current) {
+      this.logger.warn(
+        `[chunked-upload] append RESUME-TRUNCATE uploadId=${uploadId} offset=${offset} committed=${current}`,
+      );
+      await this.storageRepository.truncate(partialPath, offset);
+      current = offset;
+    } else if (offset > current) {
       this.logger.warn(
         `[chunked-upload] append OFFSET-MISMATCH uploadId=${uploadId} offset=${offset} committed=${current}`,
       );
@@ -443,7 +449,8 @@ export class AssetMediaService extends BaseService {
         this.logger.error(
           `[chunked-upload] append sha256 FAIL uploadId=${uploadId} chunkIndex=${chunkIndex} offset=${offset} expected=${manifest.chunkHashes[chunkIndex]} received=${receivedHash}`,
         );
-        throw new ConflictException({ chunkIndex });
+        await this.storageRepository.truncate(partialPath, offset);
+        throw new ConflictException({ offset });
       }
       this.logger.log(`[chunked-upload] append sha256 PASS uploadId=${uploadId} chunkIndex=${chunkIndex}`);
     }

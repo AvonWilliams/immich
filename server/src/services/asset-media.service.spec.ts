@@ -921,9 +921,25 @@ describe(AssetMediaService.name, () => {
         mocks.storage.existsSync.mockReturnValue(true);
         mocks.storage.stat.mockResolvedValue({ size: 100 } as any);
 
-        await expect(sut.uploadChunk(authStub.user1, uploadId, 50, Readable.from([]))).rejects.toBeInstanceOf(
+        await expect(sut.uploadChunk(authStub.user1, uploadId, 150, Readable.from([]))).rejects.toBeInstanceOf(
           ConflictException,
         );
+      });
+
+      it('should truncate and append when resuming from an earlier offset', async () => {
+        mocks.storage.existsSync.mockImplementation((path: string) => !path.includes('.manifest'));
+        mocks.storage.stat.mockResolvedValue({ size: 100 } as any);
+        mocks.storage.createAppendStream.mockReturnValue(
+          new Writable({
+            write(_chunk, _encoding, callback) {
+              callback();
+            },
+          }),
+        );
+
+        await sut.uploadChunk(authStub.user1, uploadId, 50, Readable.from([Buffer.from('abc')]));
+
+        expect(mocks.storage.truncate).toHaveBeenCalledWith(expect.stringContaining('.part'), 50);
       });
 
       it('should append a chunk and return the new size', async () => {
@@ -961,7 +977,7 @@ describe(AssetMediaService.name, () => {
 
         await expect(
           sut.uploadChunk(authStub.user1, uploadId, 0, Readable.from([Buffer.from('abc')])),
-        ).rejects.toMatchObject({ response: { chunkIndex: 0 } });
+        ).rejects.toMatchObject({ response: { offset: 0 } });
       });
     });
 

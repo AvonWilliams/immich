@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/constants/enums.dart';
 import 'package:immich_mobile/domain/models/asset/asset_metadata.model.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart' hide AssetVisibility;
 import 'package:immich_mobile/domain/models/store.model.dart';
@@ -31,8 +32,9 @@ class UploadCallbacks {
   final void Function(String localId, String remoteId)? onSuccess;
   final void Function(String id, String errorMessage)? onError;
   final void Function(String id, double progress)? onICloudProgress;
+  final void Function(String id, ChunkedUploadPhase phase, [int retryCount])? onPhase;
 
-  const UploadCallbacks({this.onProgress, this.onSuccess, this.onError, this.onICloudProgress});
+  const UploadCallbacks({this.onProgress, this.onSuccess, this.onError, this.onICloudProgress, this.onPhase});
 }
 
 final foregroundUploadServiceProvider = Provider((ref) {
@@ -349,6 +351,7 @@ class ForegroundUploadService {
           onProgress: onProgress != null
               ? (bytes, totalBytes) => onProgress(asset.localId!, livePhotoTitle, bytes, totalBytes)
               : null,
+      onPhase: callbacks.onPhase != null ? (phase, [retryCount = 0]) => callbacks.onPhase!(asset.localId!, phase, retryCount) : null,
           logContext: 'livePhotoVideo[${asset.localId}]',
         );
 
@@ -386,6 +389,7 @@ class ForegroundUploadService {
         onProgress: onProgress != null
             ? (bytes, totalBytes) => onProgress(asset.localId!, originalFileName, bytes, totalBytes)
             : null,
+    onPhase: callbacks.onPhase != null ? (phase, [retryCount = 0]) => callbacks.onPhase!(asset.localId!, phase, retryCount) : null,
         logContext: 'asset[${asset.localId}]',
       );
 

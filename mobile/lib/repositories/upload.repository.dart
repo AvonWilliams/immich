@@ -287,13 +287,13 @@ class UploadRepository {
             // `offset + readLength` if the body was truncated (e.g. by a proxy or
             // tunnel). Trust it rather than advancing blindly, so a partial commit
             // doesn't desync the client and make the progress jump around.
-            final committed = (jsonDecode(responseBodyString) as Map<String, dynamic>)['offset'] as int;
+            final committed = (jsonDecode(responseBodyString) as Map<String, dynamic>)['offset'] as int? ?? (offset + readLength);
             dPrint(() => "Chunked upload: committed=$committed expected=${offset + readLength} total=$totalBytes");
             offset = committed;
             retries = 0;
           } else if (response.statusCode == 409) {
             // Server committed fewer bytes than we sent; resync and re-read.
-            offset = (jsonDecode(responseBodyString) as Map<String, dynamic>)['offset'] as int;
+            offset = (jsonDecode(responseBodyString) as Map<String, dynamic>)['offset'] as int? ?? await _getChunkedUploadOffset(client, savedEndpoint, uploadId);
             retries = 0;
           } else {
             await cleanup();
@@ -396,7 +396,7 @@ class UploadRepository {
             Uri.parse('$savedEndpoint/assets/upload/$uploadId'),
           );
         }
-        return (jsonDecode(response.body) as Map<String, dynamic>)['offset'] as int;
+        return (jsonDecode(response.body) as Map<String, dynamic>)['offset'] as int? ?? 0;
       } catch (error) {
         if (attempt >= maxAttempts - 1) {
           rethrow;

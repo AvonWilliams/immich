@@ -274,6 +274,24 @@ void main() {
       verify(() => client.get(any())).called(1);
     });
 
+    test('recovers when the append response omits the offset field', () async {
+      stubInit();
+      when(() => client.send(any())).thenAnswer((invocation) async {
+        final request = invocation.positionalArguments.single as http.BaseRequest;
+        if (request.url.path.endsWith('/finalize')) {
+          await request.finalize().drain<void>();
+          return response(201, '{"id":"remote-1"}');
+        }
+        await request.finalize().drain<void>();
+        return response(200, '{}'); // malformed: no offset field
+      });
+
+      final result = await uploadBig();
+
+      expect(result.isSuccess, isTrue);
+      expect(result.remoteAssetId, 'remote-1');
+    });
+
     test('cancel mid-chunk deletes the partial and returns cancelled', () async {
       stubInit();
       when(() => client.delete(any())).thenAnswer((_) async => httpResponse('', 204));

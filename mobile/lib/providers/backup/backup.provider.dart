@@ -217,10 +217,15 @@ class BackupNotifier extends StateNotifier<BackupState> {
   }
 
   void _handleForegroundBackupPhase(String localAssetId, ChunkedUploadPhase phase, [int retryCount = 0]) {
+    if (!mounted) {
+      _logger.warning("Skip _handleForegroundBackupPhase: notifier disposed");
+      return;
+    }
     final currentItem = state.uploadItems[localAssetId];
     if (currentItem == null) {
       return;
     }
+    
     state = state.copyWith(
       uploadItems: {
         ...state.uploadItems,

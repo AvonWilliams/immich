@@ -60,5 +60,5 @@ const int kDriftMaxChunk = 32000;
 // Files larger than the threshold are uploaded in equal-size parts. Each part is
 // kept below the ~100 MB Cloudflare Tunnel request limit (90 MiB ≈ 94.4 MB decimal
 // leaves a small margin) and the value can be tuned.
-const int kChunkedUploadThresholdBytes = 12 * 1024 * 1024; // 12 MiB
-const int kUploadMaxPartSizeBytes = 12 * 1024 * 1024; // 12 MiB
+const int kChunkedUploadThresholdBytes = 60 * 1024 * 1024; // 60 MiB
+const int kUploadMaxPartSizeBytes = 60 * 1024 * 1024; // 60 MiB

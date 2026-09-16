@@ -96,6 +96,10 @@ export class StorageRepository {
     return fs.rename(source, target);
   }
 
+  truncate(filepath: string, length: number) {
+    return fs.truncate(filepath, length);
+  }
+
   utimes(filepath: string, atime: Date, mtime: Date) {
     return fs.utimes(filepath, atime, mtime);
   }

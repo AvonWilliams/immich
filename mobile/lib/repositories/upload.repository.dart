@@ -285,8 +285,11 @@ class UploadRepository {
             }
             // Snap the progress back to the server's committed offset so the bar
             // doesn't linger at the pre-reject peak while the chunk is re-sent.
-            onProgress?.call(resyncOffset, totalBytes);
-            offset = resyncOffset;
+            // Round down to a chunk boundary so the server re-verifies a whole
+            // chunk instead of a mid-chunk tail it can't hash.
+            final resumeOffset = (resyncOffset ~/ partSize) * partSize;
+            onProgress?.call(resumeOffset, totalBytes);
+            offset = resumeOffset;
             retries = 0;
             if (stalledResyncs >= 3) {
               await cleanup();
@@ -314,7 +317,8 @@ class UploadRepository {
           }
           dPrint(() => "Chunked upload $logContext failed (retry $retries/$maxRetries): $error");
           onPhase?.call(ChunkedUploadPhase.checking);
-          offset = await _getChunkedUploadOffset(client, savedEndpoint, uploadId);
+          final committed = await _getChunkedUploadOffset(client, savedEndpoint, uploadId);
+          offset = (committed ~/ partSize) * partSize;
           logger.warning("Chunked upload $logContext failed, resuming from offset $offset: $error");
         }
       }

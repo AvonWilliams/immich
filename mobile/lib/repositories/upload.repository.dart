@@ -430,6 +430,10 @@ class UploadRepository {
         final response = await client
             .get(Uri.parse('$savedEndpoint/assets/upload/$uploadId'))
             .timeout(const Duration(seconds: 15));
+        if (response.statusCode == 404) {
+          // The session is gone (deleted or expired) — retrying won't bring it back.
+          throw _SessionGoneException();
+        }
         if (response.statusCode != 200) {
           throw ClientException(
             'Failed to query chunked upload status: ${response.statusCode}',
@@ -437,6 +441,8 @@ class UploadRepository {
           );
         }
         return (jsonDecode(response.body) as Map<String, dynamic>)['offset'] as int? ?? 0;
+      } on _SessionGoneException {
+        rethrow;
       } catch (error) {
         if (attempt >= maxAttempts - 1) {
           rethrow;
@@ -446,6 +452,8 @@ class UploadRepository {
     }
   }
 }
+
+class _SessionGoneException implements Exception {}
 
 class ProgressMultipartRequest extends MultipartRequest with Abortable {
   ProgressMultipartRequest(super.method, super.url, {this.abortTrigger, this.onProgress});

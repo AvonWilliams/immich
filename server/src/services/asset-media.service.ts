@@ -6,11 +6,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { pipeline, Readable, Transform, Writable } from 'node:stream';
 import sanitize from 'sanitize-filename';
 import type { UploadFile, UploadRequest } from 'src/types.js';
 import { StorageCore } from 'src/cores/storage.core.js';
 import { Asset, AuthSharedLink } from 'src/database.js';
+import { OnEvent, OnJob } from 'src/decorators.js';
 import {
   AssetBulkUploadCheckResponseDto,
   AssetMediaResponseDto,
@@ -33,8 +35,11 @@ import {
   AssetVisibility,
   CacheControl,
   ChecksumAlgorithm,
+  ImmichWorker,
   JobName,
+  JobStatus,
   Permission,
+  QueueName,
   StorageFolder,
 } from 'src/enum.js';
 import { AuthRequest } from 'src/middleware/auth.guard.js';
@@ -43,6 +48,7 @@ import { requireUploadAccess } from 'src/utils/access.js';
 import { asUploadRequest, onBeforeLink } from 'src/utils/asset.util.js';
 import { isAssetChecksumConstraint } from 'src/utils/database.js';
 import { ImmichFileResponse, getFileNameWithoutExtension, getFilenameExtension } from 'src/utils/file.js';
+import { handlePromiseError } from 'src/utils/misc.js';
 import { mimeTypes } from 'src/utils/mime-types.js';
 import { fromChecksum } from 'src/utils/request.js';
 
@@ -546,6 +552,61 @@ export class AssetMediaService extends BaseService {
     this.logger.log(`[chunked-upload] delete EXIT uploadId=${uploadId} elapsedMs=${Date.now() - start}`);
   }
 
+  @OnEvent({ name: 'AppBootstrap', workers: [ImmichWorker.Microservices] })
+  onBootstrap(): void {
+    this.cronRepository.create({
+      name: 'chunkedUploadCleanup',
+      expression: '0 */6 * * *',
+      onTick: () =>
+        handlePromiseError(this.jobRepository.queue({ name: JobName.ChunkedUploadCleanup, data: {} }), this.logger),
+    });
+  }
+
+  @OnJob({ name: JobName.ChunkedUploadCleanup, queue: QueueName.BackgroundTask })
+  async handleChunkedUploadCleanup(): Promise<JobStatus> {
+    const uploadFolder = StorageCore.getBaseFolder(StorageFolder.Upload);
+    const cutoffMs = Date.now() - 24 * 60 * 60 * 1000;
+    let removed = 0;
+
+    await this.removeStalePartFiles(uploadFolder, cutoffMs, () => {
+      removed += 1;
+    });
+
+    if (removed > 0) {
+      await this.storageRepository.removeEmptyDirs(uploadFolder);
+    }
+
+    this.logger.log(`[chunked-upload] cleanup removed ${removed} stale part file(s)`);
+    return JobStatus.Success;
+  }
+
+  private async removeStalePartFiles(folder: string, cutoffMs: number, onRemove: () => void): Promise<void> {
+    const entries = await this.storageRepository.readdirWithTypes(folder).catch(() => []);
+
+    for (const entry of entries) {
+      const fullPath = path.join(folder, entry.name);
+      if (entry.isDirectory()) {
+        await this.removeStalePartFiles(fullPath, cutoffMs, onRemove);
+        continue;
+      }
+
+      if (!entry.name.endsWith('.part') && !entry.name.endsWith('.manifest')) {
+        continue;
+      }
+
+      try {
+        const stats = await this.storageRepository.stat(fullPath);
+        if (stats.mtimeMs < cutoffMs) {
+          await this.storageRepository.unlink(fullPath);
+          onRemove();
+          this.logger.log(`[chunked-upload] cleanup removed stale file ${fullPath}`);
+        }
+      } catch (error) {
+        this.logger.debug(`[chunked-upload] cleanup skipped ${fullPath}: ${error}`);
+      }
+    }
+    
+  }
   private getChunkedUploadPaths(auth: AuthDto, uploadId: string) {
     return {
       folder: StorageCore.getNestedFolder(StorageFolder.Upload, auth.user.id, uploadId),

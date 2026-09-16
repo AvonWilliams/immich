@@ -871,6 +871,8 @@ export enum JobName {
   FileDelete = 'FileDelete',
   FileMigrationQueueAll = 'FileMigrationQueueAll',
 
+  ChunkedUploadCleanup = 'ChunkedUploadCleanup',
+
   LibraryDeleteCheck = 'LibraryDeleteCheck',
   LibraryDelete = 'LibraryDelete',
   LibraryRemoveAsset = 'LibraryRemoveAsset',

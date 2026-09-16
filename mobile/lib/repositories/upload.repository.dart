@@ -277,7 +277,7 @@ class UploadRepository {
             onPhase?.call(ChunkedUploadPhase.sendingChunks);
           } else if (response.statusCode == 409) {
             // Server committed fewer bytes than we sent; resync and re-read.
-            final resyncOffset = (jsonDecode(responseBodyString) as Map<String, dynamic>)['offset'] as int? ?? await _getChunkedUploadOffset(client, savedEndpoint, uploadId);
+            final resyncOffset = (jsonDecode(responseBodyString) as Map<String, dynamic>)['offset'] as int? ?? await _getChunkedUploadOffset(client, savedEndpoint, uploadId, cancelToken);
             if (resyncOffset > offset) {
               stalledResyncs = 0;
             } else {
@@ -317,7 +317,7 @@ class UploadRepository {
           }
           dPrint(() => "Chunked upload $logContext failed (retry $retries/$maxRetries): $error");
           onPhase?.call(ChunkedUploadPhase.checking);
-          final committed = await _getChunkedUploadOffset(client, savedEndpoint, uploadId);
+          final committed = await _getChunkedUploadOffset(client, savedEndpoint, uploadId, cancelToken);
           offset = (committed ~/ partSize) * partSize;
           logger.warning("Chunked upload $logContext failed, resuming from offset $offset: $error");
         }
@@ -388,13 +388,16 @@ class UploadRepository {
     }
   }
 
-  Future<int> _getChunkedUploadOffset(Client client, String savedEndpoint, String uploadId) async {
+  Future<int> _getChunkedUploadOffset(Client client, String savedEndpoint, String uploadId, Completer<void>? cancelToken) async {
     // Retry with a delay so a transient network drop (e.g. airplane mode) doesn't
     // abort the upload before the network returns. A single immediate query would
     // fail while the network is still down and force the whole upload to restart.
     const int maxAttempts = 10;
     const Duration retryDelay = Duration(seconds: 3);
     for (var attempt = 0; ; attempt++) {
+      if (cancelToken?.isCompleted ?? false) {
+        throw RequestAbortedException();
+      }
       try {
         final response = await client
             .get(Uri.parse('$savedEndpoint/assets/upload/$uploadId'))

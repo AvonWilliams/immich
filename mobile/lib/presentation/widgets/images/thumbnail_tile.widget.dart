@@ -4,10 +4,12 @@ import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/constants/constants.dart';
+import 'package:immich_mobile/constants/enums.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/extensions/duration_extensions.dart';
 import 'package:immich_mobile/extensions/theme_extensions.dart';
+import 'package:immich_mobile/generated/translations.g.dart';
 import 'package:immich_mobile/presentation/widgets/images/thumbnail.widget.dart';
 import 'package:immich_mobile/presentation/widgets/timeline/constants.dart';
 import 'package:immich_mobile/providers/asset_viewer/asset_viewer.provider.dart';
@@ -206,6 +208,8 @@ class _ThumbnailTileState extends ConsumerState<ThumbnailTile> {
                     progress: uploadProgress.progress,
                     totalBytes: uploadProgress.totalBytes,
                     speed: uploadProgress.speed,
+                    phase: uploadProgress.phase,
+                    retryCount: uploadProgress.retryCount,
                   ),
               ],
             ),
@@ -351,52 +355,97 @@ class _UploadProgressOverlay extends StatelessWidget {
   final double progress;
   final int totalBytes;
   final String speed;
+  final ChunkedUploadPhase? phase;
+  final int retryCount;
 
-  const _UploadProgressOverlay({required this.progress, this.totalBytes = 0, this.speed = '-- MB/s'});
+  const _UploadProgressOverlay({
+    required this.progress,
+    this.totalBytes = 0,
+    this.speed = '-- MB/s',
+    this.phase,
+    this.retryCount = 0,
+  });
 
   @override
   Widget build(BuildContext context) {
     final isError = progress < 0;
-    final percentage = isError ? 0 : (progress * 100).toInt();
-    final isChunked = totalBytes > kChunkedUploadThresholdBytes;
+    final isRejected = phase == ChunkedUploadPhase.chunkRejected;
+    final isHashing =
+        phase == ChunkedUploadPhase.calculatingChunks || phase == ChunkedUploadPhase.calculatingHashes;
+    final isChunked = phase != null;
     final numParts = isChunked ? (totalBytes / kUploadMaxPartSizeBytes).ceil() : 0;
     final currentPart = isChunked ? (progress * numParts).floor().clamp(0, numParts - 1) + 1 : 0;
 
     return Positioned.fill(
       child: ColoredBox(
-        color: isError ? Colors.red.withValues(alpha: 0.6) : Colors.black54,
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (isError)
-                const Icon(Icons.error_outline, color: Colors.white, size: 36)
-              else
-                SizedBox(
-                  width: 36,
-                  height: 36,
-                  child: isChunked
-                      ? CustomPaint(
-                          painter: _SegmentedRingPainter(progress: progress, numParts: numParts),
-                          size: const Size(36, 36),
-                        )
-                      : CircularProgressIndicator(
-                          value: progress,
-                          strokeWidth: 3,
-                          backgroundColor: Colors.white24,
-                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-                        ),
-                ),
-              const SizedBox(height: 4),
-              Text(
-                isError ? 'Error' : '$percentage%',
-                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+        color: isError
+            ? Colors.red.withValues(alpha: 0.6)
+            : isRejected
+                ? Colors.amber.withValues(alpha: 0.6)
+                : Colors.black54,
+        child: Stack(
+          children: [
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isError)
+                    const Icon(Icons.error_outline, color: Colors.white, size: 36)
+                  else
+                    SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: isChunked
+                          ? CustomPaint(
+                              painter: _SegmentedRingPainter(
+                                progress: progress,
+                                numParts: numParts,
+                                color: isHashing ? Colors.lightBlueAccent : Colors.greenAccent,
+                                dashed: isHashing,
+                              ),
+                              size: const Size(36, 36),
+                            )
+                          : CircularProgressIndicator(
+                              value: progress,
+                              strokeWidth: 3,
+                              backgroundColor: Colors.white24,
+                              valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                            ),
+                    ),
+                  const SizedBox(height: 4),
+                  Text(
+                    isError ? 'Error' : '${(progress * 100).toInt()}%',
+                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                  ),
+                  if (!isError && phase == ChunkedUploadPhase.sendingChunks)
+                    Text(
+                      context.t.upload_status.sending_chunk_progress(current: currentPart, total: numParts),
+                      style: const TextStyle(color: Colors.white70, fontSize: 9),
+                    )
+                  else if (!isError && phase == ChunkedUploadPhase.calculatingHashes)
+                    Text(
+                      context.t.upload_status.hashing_part_progress(current: currentPart, total: numParts),
+                      style: const TextStyle(color: Colors.white70, fontSize: 9),
+                    )
+                  else if (!isError && phase != null)
+                    Text(
+                      phase == ChunkedUploadPhase.chunkRejected && retryCount > 0
+                          ? context.t.upload_status.chunk_rejected_retry(count: retryCount)
+                          : phase!.localized(),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white70, fontSize: 9),
+                    ),
+                  if (!isError) Text(speed, style: const TextStyle(color: Colors.white54, fontSize: 9)),
+                ],
               ),
-              if (isChunked && !isError)
-                Text('chunked $currentPart/$numParts', style: const TextStyle(color: Colors.white70, fontSize: 9)),
-              if (!isError) Text(speed, style: const TextStyle(color: Colors.white54, fontSize: 9)),
-            ],
-          ),
+            ),
+            if (isRejected)
+              const Positioned(
+                top: 2,
+                left: 2,
+                child: Icon(Icons.warning_amber_rounded, color: Colors.white, size: 16),
+              ),
+          ],
         ),
       ),
     );
@@ -408,12 +457,15 @@ class _UploadProgressOverlay extends StatelessWidget {
 class _SegmentedRingPainter extends CustomPainter {
   final double progress;
   final int numParts;
+  final Color color;
+  final bool dashed;
 
-  const _SegmentedRingPainter({required this.progress, required this.numParts});
+  const _SegmentedRingPainter({required this.progress, required this.numParts, required this.color, this.dashed = false});
 
   @override
   void paint(Canvas canvas, Size size) {
-    const strokeWidth = 3.9;
+    final strokeWidth = dashed ? 2.4 : 3.9;
+    final strokeCap = dashed ? StrokeCap.square : StrokeCap.round;
     final center = Offset(size.width / 2, size.height / 2);
     final radius = (size.shortestSide - strokeWidth) / 2;
     final rect = Rect.fromCircle(center: center, radius: radius);
@@ -427,14 +479,14 @@ class _SegmentedRingPainter extends CustomPainter {
     final trackPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round
+      ..strokeCap = strokeCap
       ..color = Colors.white24;
 
     final progressPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round
-      ..color = Colors.white;
+      ..strokeCap = strokeCap
+      ..color = color;
 
     final overallUnits = progress * numParts;
 
@@ -450,5 +502,8 @@ class _SegmentedRingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _SegmentedRingPainter oldDelegate) =>
-      oldDelegate.progress != progress || oldDelegate.numParts != numParts;
+      oldDelegate.progress != progress ||
+      oldDelegate.numParts != numParts ||
+      oldDelegate.color != color ||
+      oldDelegate.dashed != dashed;
 }

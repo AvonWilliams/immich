@@ -366,6 +366,9 @@ export class AssetMediaService extends BaseService {
     if (!mimeTypes.isAsset(dto.filename)) {
       throw new BadRequestException(`Unsupported file type: ${getFilenameExtension(dto.filename)}`);
     }
+    if (dto.totalSize != null) {
+      this.requireQuota(auth, dto.totalSize);
+    }
     const uploadId = randomUUID();
     const { folder, manifestPath } = this.getChunkedUploadPaths(auth, uploadId);
     this.logger.log(

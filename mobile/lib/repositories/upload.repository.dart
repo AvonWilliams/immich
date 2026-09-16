@@ -8,6 +8,7 @@ import 'package:crypto/crypto.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:http/http.dart';
 import 'package:immich_mobile/constants/constants.dart';
+import 'package:immich_mobile/constants/enums.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/infrastructure/repositories/network.repository.dart';
@@ -72,6 +73,7 @@ class UploadRepository {
     required Map<String, String> fields,
     required Completer<void>? cancelToken,
     void Function(int bytes, int totalBytes)? onProgress,
+    void Function(ChunkedUploadPhase phase, [int retryCount])? onPhase,
     required String logContext,
     Client? httpClient,
   }) async {
@@ -82,6 +84,7 @@ class UploadRepository {
         fields: fields,
         cancelToken: cancelToken,
         onProgress: onProgress,
+        onPhase: onPhase,
         logContext: logContext,
         httpClient: httpClient,
       );
@@ -156,6 +159,7 @@ class UploadRepository {
     required Map<String, String> fields,
     required Completer<void>? cancelToken,
     void Function(int bytes, int totalBytes)? onProgress,
+    void Function(ChunkedUploadPhase phase, [int retryCount])? onPhase,
     required String logContext,
     Client? httpClient,
   }) async {
@@ -164,10 +168,16 @@ class UploadRepository {
     final int totalBytes = file.lengthSync();
     final int numParts = (totalBytes / kUploadMaxPartSizeBytes).ceil();
     final int partSize = (totalBytes / numParts).ceil();
+    // Seed totalBytes up front so the progress overlay can render the size
+    // indicator and chunk count during the hashing phase, before the first
+    // chunk hash is reported.
+    onProgress?.call(0, totalBytes);
+    onPhase?.call(ChunkedUploadPhase.calculatingChunks);
 
     // Compute the sha256 of each chunk once, up front, so the init request can
     // advertise them to the server for per-chunk integrity validation.
     final List<String> chunkHashes = [];
+    onPhase?.call(ChunkedUploadPhase.calculatingHashes);
     for (var i = 0; i < numParts; i++) {
       final int start = i * partSize;
       final int end = min(start + partSize, totalBytes);
@@ -188,6 +198,7 @@ class UploadRepository {
       }
     }
 
+    onPhase?.call(ChunkedUploadPhase.sendingHashes);
     try {
       // Initialize the chunked upload session.
       Response initResponse;
@@ -233,7 +244,9 @@ class UploadRepository {
       int offset = 0;
       int retries = 0;
       const int maxRetries = 15;
+      int stalledResyncs = 0;
 
+      onPhase?.call(ChunkedUploadPhase.sendingChunks);
       while (offset < totalBytes) {
         final int readLength = min(partSize, totalBytes - offset);
 
@@ -260,10 +273,31 @@ class UploadRepository {
             dPrint(() => "Chunked upload: committed=$committed expected=${offset + readLength} total=$totalBytes");
             offset = committed;
             retries = 0;
+            stalledResyncs = 0;
+            onPhase?.call(ChunkedUploadPhase.sendingChunks);
           } else if (response.statusCode == 409) {
             // Server committed fewer bytes than we sent; resync and re-read.
-            offset = (jsonDecode(responseBodyString) as Map<String, dynamic>)['offset'] as int? ?? await _getChunkedUploadOffset(client, savedEndpoint, uploadId);
+            final resyncOffset = (jsonDecode(responseBodyString) as Map<String, dynamic>)['offset'] as int? ?? await _getChunkedUploadOffset(client, savedEndpoint, uploadId);
+            if (resyncOffset > offset) {
+              stalledResyncs = 0;
+            } else {
+              stalledResyncs++;
+            }
+            // Snap the progress back to the server's committed offset so the bar
+            // doesn't linger at the pre-reject peak while the chunk is re-sent.
+            onProgress?.call(resyncOffset, totalBytes);
+            offset = resyncOffset;
             retries = 0;
+            if (stalledResyncs >= 3) {
+              await cleanup();
+              return UploadResult.error(
+                statusCode: response.statusCode,
+                errorMessage: 'Chunked upload stalled: the server repeatedly rejected the same chunk (sha256 mismatch)',
+              );
+            }
+            // Only emit the rejection when a re-attempt is about to happen
+            // (stalledResyncs is 1 or 2); at 3 we give up instead.
+            onPhase?.call(ChunkedUploadPhase.chunkRejected, stalledResyncs);
           } else {
             await cleanup();
             return UploadResult.error(
@@ -279,6 +313,7 @@ class UploadRepository {
             rethrow;
           }
           dPrint(() => "Chunked upload $logContext failed (retry $retries/$maxRetries): $error");
+          onPhase?.call(ChunkedUploadPhase.checking);
           offset = await _getChunkedUploadOffset(client, savedEndpoint, uploadId);
           logger.warning("Chunked upload $logContext failed, resuming from offset $offset: $error");
         }
@@ -297,6 +332,7 @@ class UploadRepository {
         return request;
       }
 
+      onPhase?.call(ChunkedUploadPhase.finalizing);
       StreamedResponse response;
       try {
         response = await client.send(buildFinalizeRequest());

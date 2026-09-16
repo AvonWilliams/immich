@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/constants/constants.dart';
+import 'package:immich_mobile/constants/enums.dart';
 import 'package:immich_mobile/domain/models/album/local_album.model.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/providers/infrastructure/db.provider.dart';
@@ -30,6 +31,8 @@ abstract class UploadStatus with _$UploadStatus {
     required String networkSpeedAsString,
     bool? isFailed,
     String? error,
+    ChunkedUploadPhase? phase,
+    @Default(0) int retryCount,
   }) = _UploadStatus;
 }
 
@@ -150,6 +153,7 @@ class BackupNotifier extends StateNotifier<BackupState> {
         onSuccess: _handleForegroundBackupSuccess,
         onError: _handleForegroundBackupError,
         onICloudProgress: _handleICloudProgress,
+        onPhase: _handleForegroundBackupPhase,
       ),
     );
   }
@@ -210,6 +214,19 @@ class BackupNotifier extends StateNotifier<BackupState> {
         },
       );
     }
+  }
+
+  void _handleForegroundBackupPhase(String localAssetId, ChunkedUploadPhase phase, [int retryCount = 0]) {
+    final currentItem = state.uploadItems[localAssetId];
+    if (currentItem == null) {
+      return;
+    }
+    state = state.copyWith(
+      uploadItems: {
+        ...state.uploadItems,
+        localAssetId: currentItem.copyWith(phase: phase, retryCount: retryCount),
+      },
+    );
   }
 
   void _handleForegroundBackupSuccess(String localAssetId, String remoteAssetId) {

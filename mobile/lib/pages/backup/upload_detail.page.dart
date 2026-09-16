@@ -2,6 +2,7 @@ import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:immich_mobile/constants/constants.dart';
+import 'package:immich_mobile/constants/enums.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/generated/translations.g.dart';
@@ -280,7 +281,8 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
   Widget _buildCurrentUploadCard(BuildContext context, UploadStatus item) {
     final double progressPercentage = (item.progress * 100).clamp(0, 100);
     final isFailed = item.isFailed == true;
-    final isChunked = item.fileSize > kChunkedUploadThresholdBytes;
+    final isChunked = item.phase != null;
+    final isRejected = item.phase == ChunkedUploadPhase.chunkRejected;
 
     return Card(
       elevation: 0,
@@ -321,11 +323,17 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
                       Text(
                         isFailed
                             ? item.error ?? context.t.errors.unable_to_upload_file
-                            : "${isChunked ? 'Chunked upload • ' : ''}${formatHumanReadableBytes(item.fileSize, 1)} • ${item.networkSpeedAsString}",
+                            : [
+                                if (isChunked) context.t.upload_status.chunked_upload_label,
+                                _phaseLabel(context, item) ??
+                                    "${formatHumanReadableBytes(item.fileSize, 1)} • ${item.networkSpeedAsString}",
+                              ].join(),
                         style: context.textTheme.labelLarge?.copyWith(
                           color: isFailed
                               ? context.colorScheme.error
-                              : context.colorScheme.onSurface.withValues(alpha: 0.6),
+                              : isRejected
+                                  ? Colors.amber.shade700
+                                  : context.colorScheme.onSurface.withValues(alpha: 0.6),
                         ),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
@@ -370,6 +378,33 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
     );
   }
 
+  /// The localized phase label for a chunked upload, including the reattempt
+  /// counter when a chunk was rejected ("Chunk rejected — reattempting 2 of 3").
+  String? _phaseLabel(BuildContext context, UploadStatus item) {
+    final phase = item.phase;
+    if (phase == null) {
+      return null;
+    }
+    if (phase == ChunkedUploadPhase.chunkRejected && item.retryCount > 0) {
+      return context.t.upload_status.chunk_rejected_retry(count: item.retryCount);
+    }
+    return phase.localized();
+  }
+
+  /// Progress-bar color mirroring the thumbnail overlay's ring: amber when a
+  /// chunk was rejected, blue while hashing, green while sending.
+  Color _chunkedBarColor(UploadStatus item) {
+    final phase = item.phase;
+    if (phase == ChunkedUploadPhase.chunkRejected) {
+      return Colors.amber;
+    }
+    if (phase == ChunkedUploadPhase.calculatingChunks ||
+        phase == ChunkedUploadPhase.calculatingHashes) {
+      return Colors.lightBlueAccent;
+    }
+    return Colors.greenAccent;
+  }
+
   /// A segmented progress bar for chunked uploads: one segment per part, each
   /// filling within its own window so per-chunk progress is visible.
   Widget _buildChunkedProgressBar(BuildContext context, UploadStatus item) {
@@ -387,7 +422,7 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
               child: LinearProgressIndicator(
                 value: ((overallBytes - i * partSize) / partSize).clamp(0.0, 1.0),
                 backgroundColor: context.colorScheme.primary.withValues(alpha: 0.2),
-                valueColor: AlwaysStoppedAnimation(context.colorScheme.primary),
+                valueColor: AlwaysStoppedAnimation(_chunkedBarColor(item)),
                 minHeight: 4,
               ),
             ),

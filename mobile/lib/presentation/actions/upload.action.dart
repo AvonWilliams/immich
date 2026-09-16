@@ -97,6 +97,7 @@ Future<void> uploadAssets(BuildContext context, WidgetRef ref, List<LocalAsset> 
           failed.add(id);
           progress.setError(id);
         },
+        onPhase: (id, phase, [retryCount = 0]) => progress.setPhase(id, phase, retryCount),
       ),
     );
   } finally {

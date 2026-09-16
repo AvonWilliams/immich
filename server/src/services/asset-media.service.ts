@@ -406,7 +406,13 @@ export class AssetMediaService extends BaseService {
       throw new ConflictException({ offset: current });
     }
 
-    const manifest = await this.readChunkedUploadManifest(manifestPath);
+    let manifest: { chunkCount: number; chunkSize: number; chunkHashes: string[] } | null;
+    try {
+      manifest = await this.readChunkedUploadManifest(manifestPath);
+    } catch (error: any) {
+      this.logger.error(`[chunked-upload] append manifest-read FAIL uploadId=${uploadId}: ${error?.message ?? error}`);
+      throw new BadRequestException('Chunked upload manifest is invalid');
+    }
 
     const hash = createHash('sha256');
     await new Promise<void>((resolve, reject) => {
@@ -605,7 +611,7 @@ export class AssetMediaService extends BaseService {
         this.logger.debug(`[chunked-upload] cleanup skipped ${fullPath}: ${error}`);
       }
     }
-    
+
   }
   private getChunkedUploadPaths(auth: AuthDto, uploadId: string) {
     return {

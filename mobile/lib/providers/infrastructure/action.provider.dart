@@ -235,6 +235,7 @@ class ActionNotifier extends Notifier<void> {
             failedAssetIds.add(localAssetId);
             progressNotifier.setError(localAssetId);
           },
+          onPhase: (localAssetId, phase, [retryCount = 0]) => progressNotifier.setPhase(localAssetId, phase, retryCount),
         ),
       );
 

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -409,18 +411,21 @@ class _UploadDetailPageState extends ConsumerState<UploadDetailPage> {
   /// filling within its own window so per-chunk progress is visible.
   Widget _buildChunkedProgressBar(BuildContext context, UploadStatus item) {
     final numParts = (item.fileSize / kUploadMaxPartSizeBytes).ceil();
-    final partSize = item.fileSize / numParts;
+    // Cap drawn segments to match the ring painter, so large files don't
+    // build hundreds of progress indicators on every tick.
+    final drawnParts = math.min(numParts, 12);
+    final segmentBytes = item.fileSize / drawnParts;
     final overallBytes = item.progress * item.fileSize;
 
     return ClipRRect(
       borderRadius: const BorderRadius.all(Radius.circular(4)),
       child: Row(
         children: [
-          for (var i = 0; i < numParts; i++) ...[
+          for (var i = 0; i < drawnParts; i++) ...[
             if (i > 0) const SizedBox(width: 2),
             Expanded(
               child: LinearProgressIndicator(
-                value: ((overallBytes - i * partSize) / partSize).clamp(0.0, 1.0),
+                value: ((overallBytes - i * segmentBytes) / segmentBytes).clamp(0.0, 1.0),
                 backgroundColor: context.colorScheme.primary.withValues(alpha: 0.2),
                 valueColor: AlwaysStoppedAnimation(_chunkedBarColor(item)),
                 minHeight: 4,

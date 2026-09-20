@@ -279,6 +279,7 @@ class RemoteAlbumService {
       return 0;
     }
 
+    await _repository.upsertUser(uploader);
     await _repository.upsertRemoteAssetStub(remoteId: remoteId, ownerId: uploader.id, source: source);
     await _repository.addAssets(albumId, result.added);
     return result.added.length;

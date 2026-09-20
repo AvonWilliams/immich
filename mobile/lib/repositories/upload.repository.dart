@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 
 import 'package:background_downloader/background_downloader.dart';
@@ -177,16 +178,26 @@ class UploadRepository {
 
     // Compute the sha256 of each chunk once, up front, so the init request can
     // advertise them to the server for per-chunk integrity validation.
-    final List<String> chunkHashes = [];
+        final List<String> chunkHashes = [];
     onPhase?.call(ChunkedUploadPhase.calculatingHashes);
-    for (var i = 0; i < numParts; i++) {
+    const int hashConcurrency = 4;
+    final String filePath = file.path;
+    Future<String> hashChunk(int index) {
+      return Isolate.run(() async {
+        final start = index * partSize;
+        final end = min(start + partSize, totalBytes);
+        return (await sha256.bind(File(filePath).openRead(start, end)).first).toString();
+      });
+    }
+
+    for (var i = 0; i < numParts; i += hashConcurrency) {
       if (cancelToken?.isCompleted ?? false) {
         logger.warning("Chunked upload $logContext cancelled during hashing");
         return UploadResult.cancelled();
       }
-      final int start = i * partSize;
-      final int end = min(start + partSize, totalBytes);
-      chunkHashes.add((await sha256.bind(file.openRead(start, end)).first).toString());
+      final end = min(i + hashConcurrency, numParts);
+      final hashes = await Future.wait([for (var j = i; j < end; j++) hashChunk(j)]);
+      chunkHashes.addAll(hashes);
     }
 
     String? uploadId;
@@ -449,11 +460,16 @@ class ProgressMultipartRequest extends MultipartRequest with Abortable {
 
     final total = contentLength;
     var bytes = 0;
+    var lastEmitted = 0;
+    const int throttleBytes = 256 * 1024;
     final stream = byteStream.transform(
       StreamTransformer.fromHandlers(
         handleData: (List<int> data, EventSink<List<int>> sink) {
           bytes += data.length;
-          onProgress!(bytes, total);
+          if (bytes - lastEmitted >= throttleBytes || bytes == total) {
+            lastEmitted = bytes;
+            onProgress!(bytes, total);
+          }
           sink.add(data);
         },
       ),
@@ -488,13 +504,18 @@ class ProgressStreamRequest extends BaseRequest with Abortable {
       return byteStream;
     }
 
-    final total = contentLength ?? 0;
+final total = contentLength ?? 0;
     var bytes = 0;
+    var lastEmitted = 0;
+    const int throttleBytes = 256 * 1024;
     final stream = byteStream.transform(
       StreamTransformer.fromHandlers(
         handleData: (List<int> data, EventSink<List<int>> sink) {
           bytes += data.length;
-          onProgress!(bytes, total);
+          if (bytes - lastEmitted >= throttleBytes || bytes == total) {
+            lastEmitted = bytes;
+            onProgress!(bytes, total);
+          }
           sink.add(data);
         },
       ),

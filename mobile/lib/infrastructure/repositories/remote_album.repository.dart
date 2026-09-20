@@ -9,6 +9,7 @@ import 'package:immich_mobile/data/db/main/table/remote/album_asset.drift.dart';
 import 'package:immich_mobile/data/db/main/table/remote/album_user.drift.dart';
 import 'package:immich_mobile/data/db/main/table/remote/asset.dart';
 import 'package:immich_mobile/data/db/main/table/remote/asset.drift.dart';
+import 'package:immich_mobile/data/db/main/table/user/user.drift.dart';
 import 'package:immich_mobile/domain/models/album/album.model.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/domain/models/user.model.dart';
@@ -302,6 +303,25 @@ class RemoteAlbumRepository extends DatabaseAccessor<Drift> with $RemoteAlbumRep
     });
 
     return assetIds.length;
+  }
+
+  /// Ensures a `user_entity` row exists for [user] so the
+  /// `remote_asset_entity.owner_id` foreign key is satisfied before inserting
+  /// an asset stub. Mirrors [SyncStreamRepository.updateUsersV1]'s upsert
+  /// (insert or update on conflict) so an existing synced row is updated in
+  /// place rather than clobbered.
+  Future<void> upsertUser(UserDto user) async {
+    final companion = UserEntityCompanion(
+      name: Value(user.name),
+      email: Value(user.email),
+      hasProfileImage: Value(user.hasProfileImage),
+      profileChangedAt: Value(user.profileChangedAt),
+      avatarColor: Value(user.avatarColor),
+    );
+    await _db.into(_db.userEntity).insert(
+      companion.copyWith(id: Value(user.id)),
+      onConflict: DoUpdate((_) => companion),
+    );
   }
 
   /// Inserts a placeholder `remote_asset_entity` row from a freshly-uploaded

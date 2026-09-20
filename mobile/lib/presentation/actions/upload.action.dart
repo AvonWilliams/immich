@@ -68,11 +68,12 @@ Future<void> uploadAssets(BuildContext context, WidgetRef ref, List<LocalAsset> 
   final progress = ref.read(assetUploadProgressProvider.notifier);
   final uploads = ref.read(foregroundUploadServiceProvider);
   final toastService = ref.read(toastServiceProvider);
+  final cancelTokenNotifier = ref.read(manualUploadCancelTokenProvider.notifier);
   final errorMessage = context.t.scaffold_body_error_occurred;
   final speedManager = UploadSpeedManager();
 
   final cancelToken = Completer<void>();
-  ref.read(manualUploadCancelTokenProvider.notifier).state = cancelToken;
+  cancelTokenNotifier.state = cancelToken;
 
   final uploaded = <String>{};
   final failed = <String>{};
@@ -101,7 +102,7 @@ Future<void> uploadAssets(BuildContext context, WidgetRef ref, List<LocalAsset> 
       ),
     );
   } finally {
-    ref.read(manualUploadCancelTokenProvider.notifier).state = null;
+    cancelTokenNotifier.state = null;
   }
 
   final uploadedCount = uploaded.difference(failed).length;

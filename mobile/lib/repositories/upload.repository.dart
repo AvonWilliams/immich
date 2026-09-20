@@ -180,6 +180,10 @@ class UploadRepository {
     final List<String> chunkHashes = [];
     onPhase?.call(ChunkedUploadPhase.calculatingHashes);
     for (var i = 0; i < numParts; i++) {
+      if (cancelToken?.isCompleted ?? false) {
+        logger.warning("Chunked upload $logContext cancelled during hashing");
+        return UploadResult.cancelled();
+      }
       final int start = i * partSize;
       final int end = min(start + partSize, totalBytes);
       chunkHashes.add((await sha256.bind(file.openRead(start, end)).first).toString());

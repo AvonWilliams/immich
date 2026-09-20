@@ -16,6 +16,7 @@ import 'package:immich_mobile/providers/asset_viewer/asset_viewer.provider.dart'
 import 'package:immich_mobile/providers/backup/asset_upload_progress.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/settings.provider.dart';
 import 'package:immich_mobile/providers/timeline/multiselect.provider.dart';
+import 'package:immich_mobile/utils/bytes_units.dart';
 
 class ThumbnailTile extends ConsumerStatefulWidget {
   const ThumbnailTile(
@@ -351,7 +352,7 @@ class _StackIndicator extends StatelessWidget {
   }
 }
 
-class _UploadProgressOverlay extends StatelessWidget {
+class _UploadProgressOverlay extends ConsumerWidget {
   final double progress;
   final int totalBytes;
   final String speed;
@@ -367,7 +368,7 @@ class _UploadProgressOverlay extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isError = progress < 0;
     final isRejected = phase == ChunkedUploadPhase.chunkRejected;
     final isHashing =
@@ -435,6 +436,11 @@ class _UploadProgressOverlay extends StatelessWidget {
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Colors.white70, fontSize: 9),
                     ),
+                  if (!isError && totalBytes > 0)
+                    Text(
+                      '${formatBytes((progress * totalBytes).round())} / ${formatBytes(totalBytes)}',
+                      style: const TextStyle(color: Colors.white70, fontSize: 9),
+                    ),
                   if (!isError) Text(speed, style: const TextStyle(color: Colors.white54, fontSize: 9)),
                 ],
               ),
@@ -445,6 +451,20 @@ class _UploadProgressOverlay extends StatelessWidget {
                 left: 2,
                 child: Icon(Icons.warning_amber_rounded, color: Colors.white, size: 16),
               ),
+            Positioned(
+              top: 2,
+              right: 2,
+              child: IconButton(
+                onPressed: () {
+                  ref.read(manualUploadCancelTokenProvider)?.complete();
+                  ref.read(manualUploadCancelTokenProvider.notifier).state = null;
+                },
+                icon: const Icon(Icons.close_rounded, color: Colors.white, size: 16),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+                tooltip: context.t.cancel,
+              ),
+            ),
           ],
         ),
       ),

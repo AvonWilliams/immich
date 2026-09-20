@@ -13,6 +13,7 @@ import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/infrastructure/repositories/network.repository.dart';
 import 'package:immich_mobile/providers/server_info.provider.dart';
+import 'package:immich_mobile/utils/debug_print.dart';
 import 'package:logging/logging.dart';
 
 final uploadRepositoryProvider = Provider(

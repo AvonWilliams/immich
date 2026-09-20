@@ -475,6 +475,12 @@ class _UploadProgressOverlay extends ConsumerWidget {
 /// A chunked-upload progress ring drawn as separate rounded "worm" arcs — one per
 /// chunk — with a gap between them, instead of a continuous ring with divider ticks.
 class _SegmentedRingPainter extends CustomPainter {
+  /// Cap on the number of ring segments actually drawn. Large files can have
+  /// hundreds of chunks; drawing one arc per chunk shrinks each arc below the
+  /// rounded-cap gap until the ring collapses into an unreadable (or empty)
+  /// ring. Beyond this many segments each drawn segment stands in for several.
+  static const int _maxSegments = 12;
+
   final double progress;
   final int numParts;
   final Color color;
@@ -490,7 +496,8 @@ class _SegmentedRingPainter extends CustomPainter {
     final radius = (size.shortestSide - strokeWidth) / 2;
     final rect = Rect.fromCircle(center: center, radius: radius);
 
-    final segmentAngle = math.pi * 2 / numParts;
+    final drawnParts = math.min(numParts, _maxSegments);
+    final segmentAngle = math.pi * 2 / drawnParts;
     // The rounded caps extend `strokeWidth / radius` radians into the gap on each
     // side, so keep the gap at least that wide to avoid overlapping heads/tails.
     final gapAngle = math.max(segmentAngle * 0.125, strokeWidth / radius);
@@ -508,9 +515,9 @@ class _SegmentedRingPainter extends CustomPainter {
       ..strokeCap = strokeCap
       ..color = color;
 
-    final overallUnits = progress * numParts;
+    final overallUnits = progress * drawnParts;
 
-    for (var i = 0; i < numParts; i++) {
+    for (var i = 0; i < drawnParts; i++) {
       final startAngle = -math.pi / 2 + i * segmentAngle + gapAngle / 2;
       canvas.drawArc(rect, startAngle, sweepAngle, false, trackPaint);
       final fill = (overallUnits - i).clamp(0.0, 1.0);

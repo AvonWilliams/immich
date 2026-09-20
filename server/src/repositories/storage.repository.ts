@@ -81,7 +81,7 @@ export class StorageRepository {
   }
 
   createAppendStream(filepath: string): Writable {
-    return createWriteStream(filepath, { flags: 'a', flush: true });
+    return createWriteStream(filepath, { flags: 'a' });
   }
 
   createOrOverwriteFile(filepath: string, buffer: Buffer) {
